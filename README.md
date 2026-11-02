@@ -7,6 +7,9 @@ QQ 农场助手的 **群晖 Synology DSM 原生套件（`.spk`）** 版本。
 > `synology/` 打包链、DSM 生命周期钩子、前端群晖化改动、本 README 与 `docs/` 下的文档，全部由 AI 编写并在真实群晖（SA6400 / DSM 7.2.2）上安装、运行、原地升级验证过。文中每一条「实测」都对应一次真实执行与取证，不是推断或复制粘贴。人只负责两件事：提需求、拍板。
 > 农场核心功能（协议、活动、逻辑）不在此范围内，属于下面血缘里的上游项目。
 
+> [!NOTE]
+> **致谢与下架承诺**：本仓库能跑起来，靠的是上游两代作者和贡献者的付出——群晖适配只是把同一套东西换个打包形态，不对上游代码主张任何权利，也不作商业用途。若原作者认为构成侵权，或希望它不再存在，请到 [仓库 Issues](https://github.com/Vjjvj/qq-farm-bot-Synology/issues) 留言说明，看到即删除整个仓库，不做争辩、不改名保留。详见文末「许可、致谢与下架」。
+
 本项目 fork 自 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos)（飞牛 fnOS 原生版），它又 fork 自 qq-farm-bot 原始项目。QQ 农场助手的核心功能、下面「额外功能」里列的所有特性都来自这两层上游，感谢原作者及贡献者；本仓库只在此之上做群晖打包与适配。
 
 **这个 fork 只出群晖包，不再产出飞牛 FPK。** 与上游共用且被本仓库改过的文件目前只有一个：`web/src/components/Sidebar.vue`（兜底文案「飞牛用户/飞牛管理员/已通过飞牛登录」改为群晖字样，版本前缀 `fpk` → `spk`）。要出飞牛包请回上游，别用这个分支——那样侧栏会显示群晖字样。
@@ -31,7 +34,7 @@ LOG_LEVEL="info"         # error / warn / info / debug
 
 改完在套件中心重启套件生效（`settings.conf` 由 `scripts/start-stop-status` 每次启动时 source）。如果要出公网，务必把 `ADMIN_HOST` 改回 `127.0.0.1`，认证放在反代/隧道那一层，并清掉转发过来的 `X-Trim-*` 请求头——**没有这些头时应用把访问者当作管理员**，客户端自己伪造 `X-Trim-Isadmin: false` 反而会把自己挡在门外。不要把 3007 端口直接映射到公网。
 
-`postinst` 只在 `settings.conf` **不存在时**才写默认值，所以升级不会覆盖你改过的配置。
+`postinst` 只在 `settings.conf` **不存在时**才写默认值，所以升级不会覆盖你改过的配置。升级过程中 DSM 会依次跑 `stop → preupgrade → preuninst → postuninst → preinst → postinst → postupgrade → start`（`-4 → -5 → -6` 两次原地升级实测，八步全 `code:0`，`settings.conf` 与 `data/` 的 md5 前后一致）——注意**卸载钩子在升级里也会被执行**，`postuninst` 删数据等于升级时清库。
 
 ## 安装
 
@@ -42,6 +45,8 @@ LOG_LEVEL="info"         # error / warn / info / debug
 架构选 `x86_64`（含 SA/DS 的 Intel-AMD 机型）或 `armv8`（rtd1296 / rtd1619 / armada37xx）。**装前确认 glibc**：Node 22 需要 ≥ 2.28，在群晖上跑 `echo x | /lib/libc.so.6 | head -1`（DSM 的 `/usr/bin/ldd --version` 没有任何输出，别看它）。`x86_64` 包已在 DSM 7.2.2-72806 Update 8 + SA6400（glibc 2.36）实机装成功并跑起任务；`armv8` 只是打包链参数化，尚未实机验证。
 
 卸载：`/volume1/@appdata/qq-farm-bot/` 里的账号、登录态和日志**实测在卸载后仍然保留**（连装带卸三个版本来回，`data/logs/` 里最早的日志还在）。但套件中心的卸载弹窗若勾选了删除套件数据则会清空，动手前自己备份这个目录。
+
+**重启要重新扫码**：套件每次重启——覆盖升级、改 `settings.conf` 后重启、重启 NAS——之后，已保存的 QQ 登录 Code 都连不上（网关在 WebSocket 握手阶段直接回 400，实测 13 分钟后重试依旧），必须在面板里逐个账号重新扫码。应用没有自动刷新 Code 的能力，日志里「等待 Helper 刷新 Code」那句只是文案。所以别在挂机时段升级。
 
 ## 自行构建
 
@@ -123,6 +128,10 @@ SPK_VERSION=2026.11.2-3 synology/build.sh      # 指定版本号
 - [`synology/`](synology/build.sh) —— 群晖打包链：`build.sh` + `conf/privilege` + `scripts/` 生命周期钩子。
 - [`fnos/`](fnos/飞牛部署与变更说明.md) —— 飞牛版构建链与变更说明；群晖版复用了它的 `fnos/sea/entry.js` 入口和套件图标。
 
-## 许可
+## 许可、致谢与下架
 
-许可沿用上游项目的声明（上游 `package.json` 中声明为 ISC）。本项目同样仅供学习与研究使用，使用者需自行承担因使用本工具产生的后果。
+**许可**：许可沿用上游项目的声明（上游 `package.json` 中声明为 ISC）。本项目同样仅供学习与研究使用，使用者需自行承担因使用本工具产生的后果。
+
+**致谢**：感谢 qq-farm-bot 原始项目的作者与贡献者，以及 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos) 的作者与贡献者。协议逆向、活动逻辑、TSDK 运行时这些真正难做的部分都是他们的工作；本仓库新增的只有 `synology/` 打包链、DSM 生命周期钩子、一处前端文案和文档。没有上游，这里什么都跑不起来。
+
+**下架承诺**：本项目不作商业用途、不提供任何托管服务，也不主张对上游代码的权利。如果上游作者认为本仓库构成侵权，或出于任何原因希望它消失，请在 [仓库 Issues](https://github.com/Vjjvj/qq-farm-bot-Synology/issues) 留言说明来意，我会直接删除整个仓库——不转移、不改名保留、不争论。
