@@ -1,0 +1,34 @@
+#!/bin/sh
+# 安装后钩子（以包账号 sc-qq-farm-bot 执行）：准备数据目录与默认配置
+#
+# DSM 7.2 拒绝安装声明 root 执行权限的第三方包（报「由于XX以 root 权限运行，因此无法安装」），
+# 所以 conf/privilege 只留 defaults.run-as=package，这里不能假设自己是 root：
+# target 与 var 的属主由 DSM 安装时改成包账号，无需也不该 chown。
+
+SETTINGS="${SYNOPKG_PKGVAR}/settings.conf"
+
+mkdir -p "${SYNOPKG_PKGVAR}/data/logs"
+
+# start-stop-status 会 source 这个文件，必须是合法 sh 赋值语句
+if [ ! -f "${SETTINGS}" ]; then
+	cat >"${SETTINGS}" <<'CONF'
+# QQ 农场运行配置（由 start-stop-status 读取，改动后需重启套件生效）
+
+# 监听地址与端口。应用本身没有登录页，能连到端口的访问者就是管理员。
+# 默认绑 0.0.0.0：装完就能从局域网直接开 http://<NAS_IP>:3007/，不用先做隧道。
+# 代价是同网段任意设备（访客手机、IoT 设备）连上即可操作你的 QQ 账号。
+# 只想本机访问就改回 ADMIN_HOST="127.0.0.1"；要出公网建议走 Cloudflare Tunnel
+# 或反代并保留回环绑定——注意反代必须清掉 X-Trim-* 请求头，没有这些头时应用
+# 把访问者当作管理员，而客户端自己伪造 X-Trim-Isadmin: false 反而会把自己挡在门外。
+ADMIN_HOST="0.0.0.0"
+ADMIN_PORT="3007"
+
+# 日志级别：error / warn / info / debug
+LOG_LEVEL="info"
+CONF
+fi
+
+# 打包时已是 755，这里只是兜底；属主还没轮到包账号时会失败，忽略即可
+chmod 755 "${SYNOPKG_PKGDEST}/node/bin/node" 2>/dev/null
+
+exit 0

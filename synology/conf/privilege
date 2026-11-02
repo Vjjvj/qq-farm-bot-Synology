@@ -1,0 +1,7 @@
+{
+    "defaults": {
+        "run-as": "package"
+    },
+    "username": "sc-qq-farm-bot",
+    "groupname": "sc-qq-farm-bot"
+}

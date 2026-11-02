@@ -1,0 +1,4 @@
+#!/bin/sh
+# 升级前钩子：DSM 已按 stop → preupgrade 顺序调用，${SYNOPKG_PKGVAR} 整目录保留
+
+exit 0

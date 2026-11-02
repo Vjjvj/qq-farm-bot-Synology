@@ -60,3 +60,6 @@ protocol-captures/
 
 # fnOS 打包输出
 fnos/out/
+
+# DSM 打包输出
+synology/out/

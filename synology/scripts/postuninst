@@ -1,0 +1,5 @@
+#!/bin/sh
+# 卸载后钩子：${SYNOPKG_PKGVAR}/data 里的登录态与配置已被 DSM 连同目录删除，
+# 需要备份请在卸载前自行导出。
+
+exit 0

@@ -1,0 +1,131 @@
+#!/bin/sh
+# QQ 农场（qq-farm-bot）DSM 生命周期钩子：start / stop / status
+#
+# DSM 7 按 conf/privilege 以 sc-qq-farm-bot 身份执行本脚本，因此不需要 su/runuser 降权。
+# 默认绑 0.0.0.0 放行局域网（与 postinst 写进 settings.conf 的默认值保持一致），
+# 想收回回环就改 ${SYNOPKG_PKGVAR}/settings.conf 里的 ADMIN_HOST 再重启套件。
+
+PKG_NAME="qq-farm-bot"
+NODE_BIN="${SYNOPKG_PKGDEST}/node/bin/node"
+SERVER_DIR="${SYNOPKG_PKGDEST}/server"
+MAIN_JS="${SERVER_DIR}/bin/main.js"
+WORKER_JS="${SERVER_DIR}/bin/worker.js"
+SETTINGS="${SYNOPKG_PKGVAR}/settings.conf"
+DATA_DIR="${SYNOPKG_PKGVAR}/data"
+PID_FILE="${SYNOPKG_PKGVAR}/${PKG_NAME}.pid"
+LOG_FILE="${SYNOPKG_PKGVAR}/${PKG_NAME}.log"
+
+ADMIN_HOST="0.0.0.0"
+ADMIN_PORT="3007"
+LOG_LEVEL="info"
+
+if [ -f "${SETTINGS}" ]; then
+	. "${SETTINGS}"
+fi
+
+log() {
+	echo "[$(date '+%Y-%m-%d %H:%M:%S')] $*" >>"${LOG_FILE}" 2>/dev/null
+}
+
+is_running() {
+	[ -f "${PID_FILE}" ] || return 1
+	pid=$(cat "${PID_FILE}" 2>/dev/null)
+	[ -n "${pid}" ] || return 1
+	kill -0 "${pid}" 2>/dev/null
+}
+
+rotate_log() {
+	[ -f "${LOG_FILE}" ] || return 0
+	size=$(wc -c <"${LOG_FILE}" 2>/dev/null)
+	[ -n "${size}" ] || return 0
+	if [ "${size}" -gt 10485760 ]; then
+		mv -f "${LOG_FILE}" "${LOG_FILE}.1" 2>/dev/null
+	fi
+}
+
+do_start() {
+	if is_running; then
+		exit 0
+	fi
+	rm -f "${PID_FILE}"
+
+	if [ ! -x "${NODE_BIN}" ]; then
+		log "启动失败：缺少可执行文件 ${NODE_BIN}"
+		exit 1
+	fi
+	if [ ! -f "${MAIN_JS}" ] || [ ! -f "${WORKER_JS}" ]; then
+		log "启动失败：缺少 ${MAIN_JS} 或 ${WORKER_JS}"
+		exit 1
+	fi
+
+	mkdir -p "${DATA_DIR}/logs" || exit 1
+	rotate_log
+
+	cd "${SERVER_DIR}" || exit 1
+	TZ="Asia/Shanghai" \
+	NODE_ENV="production" \
+	LOG_LEVEL="${LOG_LEVEL}" \
+	ADMIN_HOST="${ADMIN_HOST}" \
+	ADMIN_PORT="${ADMIN_PORT}" \
+	QQ_FARM_DATA_DIR="${DATA_DIR}" \
+	QQ_FARM_RESOURCE_DIR="${SERVER_DIR}/resources" \
+	QQ_FARM_WEB_DIR="${SERVER_DIR}/web/dist" \
+	QQ_FARM_WORKER_SCRIPT="${WORKER_JS}" \
+	nohup "${NODE_BIN}" "${MAIN_JS}" >>"${LOG_FILE}" 2>&1 </dev/null &
+	echo "$!" >"${PID_FILE}"
+
+	# 端口占用等原因会让进程立刻退出，这里等到就绪再返回
+	i=0
+	while [ "${i}" -lt 10 ]; do
+		if is_running; then
+			log "已启动：PID $(cat "${PID_FILE}")，监听 ${ADMIN_HOST}:${ADMIN_PORT}"
+			exit 0
+		fi
+		i=$((i + 1))
+		sleep 1
+	done
+
+	log "启动失败：进程未在 10 秒内保持运行，请查看 ${LOG_FILE}"
+	rm -f "${PID_FILE}"
+	exit 1
+}
+
+do_stop() {
+	if is_running; then
+		pid=$(cat "${PID_FILE}")
+		kill -TERM "${pid}" 2>/dev/null
+		i=0
+		while [ "${i}" -lt 15 ]; do
+			kill -0 "${pid}" 2>/dev/null || break
+			i=$((i + 1))
+			sleep 1
+		done
+		kill -0 "${pid}" 2>/dev/null && kill -KILL "${pid}" 2>/dev/null
+		log "已停止：PID ${pid}"
+	fi
+	rm -f "${PID_FILE}"
+	exit 0
+}
+
+do_status() {
+	if is_running; then
+		exit 0
+	fi
+	exit 3
+}
+
+case "$1" in
+start | prestart)
+	do_start
+	;;
+stop | prestop)
+	do_stop
+	;;
+status)
+	do_status
+	;;
+*)
+	echo "Usage: $0 {start|stop|status}"
+	exit 1
+	;;
+esac

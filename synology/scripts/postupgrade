@@ -1,0 +1,7 @@
+#!/bin/sh
+# 升级后钩子（以包账号执行）：${SYNOPKG_PKGVAR} 在升级中保留，这里只补齐目录与可执行位
+
+mkdir -p "${SYNOPKG_PKGVAR}/data/logs"
+chmod 755 "${SYNOPKG_PKGDEST}/node/bin/node" 2>/dev/null
+
+exit 0
