@@ -262,7 +262,7 @@ function selectAccount(acc: any) {
 
 // 侧栏左下角显示「spk v<发布版本>」（群晖构建时由 synology/build.sh 传入 FPK_VERSION=SPK_VERSION）；未注入时显示「spk dev」。Core 仍用上游 /api/ping 的 version。
 const fpkVersionText = __FPK_VERSION__ ? `spk v${__FPK_VERSION__}` : 'spk dev'
-const FNOS_REPO_URL = 'https://github.com/Maksim-venus/qq-farm-bot-fnos'
+const REPO_URL = 'https://github.com/Vjjvj/qq-farm-bot-Synology'
 
 watch(
   () => route.path,
@@ -547,7 +547,7 @@ watch(isSidebarCollapsed, closeFlyouts)
               <!-- 群晖版：Web v → spk v<包版本>；GitHub 链到本 fork -->
               <span>{{ fpkVersionText }}</span>
               <a
-                :href="FNOS_REPO_URL"
+                :href="REPO_URL"
                 target="_blank"
                 rel="noopener noreferrer"
                 title="开源地址"
@@ -591,7 +591,7 @@ watch(isSidebarCollapsed, closeFlyouts)
           <template #trigger>
             <a
               class="sidebar-footer__icon"
-              :href="FNOS_REPO_URL"
+              :href="REPO_URL"
               target="_blank"
               rel="noopener noreferrer"
               aria-label="查看项目版本与开源地址"

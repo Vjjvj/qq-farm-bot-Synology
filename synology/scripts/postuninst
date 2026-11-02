@@ -1,5 +1,9 @@
 #!/bin/sh
-# 卸载后钩子：${SYNOPKG_PKGVAR}/data 里的登录态与配置已被 DSM 连同目录删除，
-# 需要备份请在卸载前自行导出。
+# 卸载后钩子：刻意什么都不删。
+#
+# 实测（DSM 7.2.2 / SA6400）卸载只删 ${SYNOPKG_PKGDEST}，${SYNOPKG_PKGVAR} 下的
+# settings.conf 与 data/（含 QQ 登录态）原样留在 /volume1/@appdata/<pkg>，重装即复用。
+# 而升级流程 DSM 会当「卸载 + 安装」跑，本钩子照样执行——在这里删数据等于升级时清库。
+# 要彻底清库请自行删除 ${SYNOPKG_PKGVAR}。
 
 exit 0
