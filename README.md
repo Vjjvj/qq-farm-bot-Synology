@@ -1,17 +1,73 @@
-# qq-farm-bot-fnos
+# qq-farm-bot-Synology
 
-QQ 农场助手的 **飞牛 fnOS 原生应用（FPK）** 版本。
+QQ 农场助手的 **群晖 Synology DSM 原生套件（`.spk`）** 版本。
 
-本项目 fork 自 [liyangpengs/qq-farm-bot](https://github.com/liyangpengs/qq-farm-bot)，在其基础上做了飞牛原生打包与网关适配，并增加了少量额外功能（见下方「额外功能」）。QQ 农场助手的核心功能均来自上游项目，感谢原作者及贡献者。
+本项目 fork 自 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos)（飞牛 fnOS 原生版），它又 fork 自 qq-farm-bot 原始项目。QQ 农场助手的核心功能、下面「额外功能」里列的所有特性都来自这两层上游，感谢原作者及贡献者；本仓库只在此之上做群晖打包与适配。
 
-- 以飞牛原生进程运行，后端为自带运行环境的单文件可执行程序，**无需安装 Node.js**。
-- **不开放任何端口**：服务只监听飞牛统一网关的 Unix Socket，从飞牛桌面图标「QQ 农场」或 `/app/qq-farm-bot/` 访问。
-- **移除登录 / 改密模块**：应用内不再有管理员账号和密码，访问控制完全由飞牛登录负责。
-- 数据保存在应用数据目录 `/vol*/@appdata/qq-farm-bot/data`。
+**这个 fork 只出群晖包，不再产出飞牛 FPK。** 与上游共用且被本仓库改过的文件目前只有一个：`web/src/components/Sidebar.vue`（兜底文案「飞牛用户/飞牛管理员/已通过飞牛登录」改为群晖字样，版本前缀 `fpk` → `spk`）。要出飞牛包请回上游，别用这个分支——那样侧栏会显示群晖字样。
+
+## 群晖版是什么样的
+
+- **DSM 原生套件**，不是 Docker。由套件中心统一安装、启停、升级（`INFO` 里 `ctl_stop="yes"`，重装/升级会走钩子）；重启 NAS 后是否自动拉起没做过实测，但脚本本身只依赖 DSM 的标准 `start` 调用。
+- **自带 Node.js 22 官方二进制**，不依赖套件中心的「Node.js」套件；后端是 esbuild 打出的两个纯 JS 文件（`bin/main.js`、`bin/worker.js`）。
+- **以普通包账号运行**：`conf/privilege` 只声明 `defaults.run-as="package"` + `username`/`groupname = sc-qq-farm-bot`，不声明任何 root 权限。DSM 7.2 会**直接拒绝**声明 root 的第三方包，连解包都不做——这是装机实测踩到的第一道墙，别照着官方套件文档加 `ctrl-script`。
+- **监听 TCP，默认放行局域网**：`0.0.0.0:3007`，浏览器直接开 `http://<群晖 IP>:3007/`。不走 `/webman/3rdparty/` 网关前缀（那个前缀只伺服静态文件，不是反向代理）。
+- **移除了登录 / 改密模块**：应用内没有管理员账号密码，谁能连上这个端口谁就是管理员。
+
+## ⚠️ 装完先看这段
+
+默认监听 `0.0.0.0:3007` 意味着**同网段任何设备打开这个端口就能控制你挂在上面的 QQ 账号**（应用没有登录页，也没有二次校验）。确认内网可信再用；想收紧改 `/volume1/@appdata/qq-farm-bot/settings.conf`：
+
+```ini
+ADMIN_HOST="127.0.0.1"   # 只本机可达，之后靠 SSH 端口转发或反代/隧道访问
+ADMIN_PORT="3007"
+LOG_LEVEL="info"         # error / warn / info / debug
+```
+
+改完在套件中心重启套件生效（`settings.conf` 由 `scripts/start-stop-status` 每次启动时 source）。如果要出公网，务必把 `ADMIN_HOST` 改回 `127.0.0.1`，认证放在反代/隧道那一层，并清掉转发过来的 `X-Trim-*` 请求头——**没有这些头时应用把访问者当作管理员**，客户端自己伪造 `X-Trim-Isadmin: false` 反而会把自己挡在门外。不要把 3007 端口直接映射到公网。
+
+`postinst` 只在 `settings.conf` **不存在时**才写默认值，所以升级不会覆盖你改过的配置。
+
+## 安装
+
+1. 取 `qq-farm-bot_<版本>_<架构>.spk`（当前本仓库 Releases 还没发布产物，按下节自行构建；发布后一律核对同目录的 `.sha256`）。版本号是构建日期 `YYYY.MM.DD-N`，例如 `2026.11.02-4`——DSM 把它当「主版本-feature build」两段比较，同一天再出一版就把 `-N` 递增，套件中心能直接覆盖升级。
+2. 套件中心 → 「手动安装」，选择该 `.spk`，按向导点到底（第三方包没有 Synology 签名，向导里的来源确认文案随 DSM 小版本变化，本机 7.2.2-72806 上正常走完，安装期日志落在 `/var/log/synopkg.log`）。
+3. 安装完自动启动。浏览器打开 `http://<群晖 IP>:3007/`，在面板里添加 QQ 账号（扫码登录，登录态落在 `@appdata` 数据目录）。
+
+架构选 `x86_64`（含 SA/DS 的 Intel-AMD 机型）或 `armv8`（rtd1296 / rtd1619 / armada37xx）。**装前确认 glibc**：Node 22 需要 ≥ 2.28，在群晖上跑 `echo x | /lib/libc.so.6 | head -1`（DSM 的 `/usr/bin/ldd --version` 没有任何输出，别看它）。`x86_64` 包已在 DSM 7.2.2-72806 Update 8 + SA6400（glibc 2.36）实机装成功并跑起任务；`armv8` 只是打包链参数化，尚未实机验证。
+
+卸载：`/volume1/@appdata/qq-farm-bot/` 里的账号、登录态和日志**实测在卸载后仍然保留**（连装带卸三个版本来回，`data/logs/` 里最早的日志还在）。但套件中心的卸载弹窗若勾选了删除套件数据则会清空，动手前自己备份这个目录。
+
+## 自行构建
+
+**只能在 Linux 上构建**（`.spk` 外层是不压缩的 tar，内含带可执行位的 `node`；在 Windows/Git Bash 打包会丢权限，装到 DSM 上起不来）。依赖：GNU tar、Node.js 20+、pnpm 10、curl。
+
+```sh
+pnpm install
+synology/build.sh                              # x86_64，版本号取当天日期 -1
+SPK_ARCH=armv8 synology/build.sh               # armv8
+SPK_VERSION=2026.11.2-3 synology/build.sh      # 指定版本号
+```
+
+产物在 `synology/out/qq-farm-bot_<版本>_<架构>.spk`（+ `.sha256`）。可覆盖的环境变量：`SPK_ARCH`、`SPK_VERSION`、`NODE_VERSION`、`NODE_CACHE_DIR`（复用已下载的 Node dist，跳过外网拉取）、`SKIP_INSTALL=1`（依赖已装好时跳过 `pnpm install`）、`MAINTAINER`（写进 `INFO` 的发布商名，仓库没有 git 配置时会是 `unknown`）。
+
+构建脚本里两个不显然的约束：不得把 `QQ_FARM_NO_TCP=1` 编进产物（脚本会 grep 拦住，否则群晖版永远拒绝监听 TCP）；后端依赖必须全是纯 JS，出现 `.node` 原生模块就得随包提供对应架构的预编译文件（同样会拦）。
+
+完整教程——怎么在群晖本机搭构建用的 Node/pnpm、DSM 没有 sftp 时怎么传代码、出包后不装就能验完的自检清单、失败对照表——见 [`docs/synology-build.md`](docs/synology-build.md)。
+
+## 运行期位置
+
+| 路径 | 内容 |
+|---|---|
+| `/var/packages/qq-farm-bot/` | `INFO`、`conf/privilege`、`scripts/`（DSM 用的钩子） |
+| `/var/packages/qq-farm-bot/target` → `/volume1/@appstore/qq-farm-bot` | `node/bin/node`、`server/bin/*.js`、`server/resources/`、`server/web/dist` |
+| `/var/packages/qq-farm-bot/var` → `/volume1/@appdata/qq-farm-bot` | `settings.conf`、`data/`（账号、登录态、日志）、`qq-farm-bot.log`、`qq-farm-bot.pid` |
+
+排查命令用绝对路径：非交互 SSH 里 `synopkg` 不在 PATH 上，得写 `/usr/syno/bin/synopkg status qq-farm-bot`。
 
 ## 额外功能
 
-以下功能为本 fork 新增。设置类功能**按账号分别设置，默认关闭**。
+以下功能由飞牛版 fork 新增，群晖版一并带上。设置类功能**按账号分别设置，默认关闭**。
 
 「设置 → 大小号协作」：
 
@@ -49,20 +105,18 @@ QQ 农场助手的 **飞牛 fnOS 原生应用（FPK）** 版本。
 
 - **地块卡片直接施肥**：每块地的卡片上有「普通肥」「有机肥」按钮，点一下只给这一块地施肥；当前不能施肥时按钮变灰，悬停可看原因（如「当前作物无需施肥」「有机化肥次数已用完」）。受「设置 → 自动控制 → 显示手动施肥按钮」控制，进入「选择土地」时隐藏。上游的选地批量施肥和一键施肥照常可用。
 
-执行结果会写在日志里。详细说明见变更说明中的 2026.10.20.1、2026.10.21、2026.10.21.1、2026.10.21.2、2026.10.21.3、2026.10.21.4、2026.10.22、2026.10.22.1、2026.10.27、2026.10.27.1、2026.10.29、2026.10.29.1、2026.10.30、2026.10.31 和 2026.11.1 各节。
+执行结果会写在日志里。这些功能的来源与逐版变更见上游的 [`fnos/飞牛部署与变更说明.md`](fnos/飞牛部署与变更说明.md) 中 2026.10.20.1、2026.10.21、2026.10.21.1、2026.10.21.2、2026.10.21.3、2026.10.21.4、2026.10.22、2026.10.22.1、2026.10.27、2026.10.27.1、2026.10.29、2026.10.29.1、2026.10.30、2026.10.31 和 2026.11.1 各节。
 
 ## 上游同步说明
 
 本版已合并上游 `20261101`：独立「图鉴」侧栏（含藏品宝典、变异目录等只读页面），游戏协议 QQ/微信 `1.16.0.5_20261028`。藏品相关官方写操作（激活/升星等）上游尚未实现；蓝晶土地（6 级）与紫金（5 级）已分开。
 
+## 项目文档
 
-## 安装
-
-1. 从 [Releases](https://github.com/Maksim-venus/qq-farm-bot-fnos/releases) 下载 `qq-farm-bot_<版本>_native_x86.fpk`，并核对 SHA-256。版本号就是构建日期，例如 `2026.10.19`；同一天再发一版时依次加 `.1`、`.2`……（如 `2026.10.19.1`）。数字逐段越大越新，应用中心可直接覆盖升级。
-2. 打开「应用中心 → 手动安装」，选择该 FPK；已安装旧版时确认覆盖升级。
-3. 安装完成后从桌面图标「QQ 农场」打开。
-
-自行构建：`pnpm install && fnos/build.sh`，产物在 `fnos/out/`。详细说明见 [`fnos/飞牛部署与变更说明.md`](fnos/飞牛部署与变更说明.md)。
+- [`docs/synology-build.md`](docs/synology-build.md) —— 群晖出包教程：构建机准备、传代码、产物自检、失败对照。
+- [`docs/`](docs/README.md) —— 协议研究、配置存储、网络并发模型等专题文档索引。
+- [`synology/`](synology/build.sh) —— 群晖打包链：`build.sh` + `conf/privilege` + `scripts/` 生命周期钩子。
+- [`fnos/`](fnos/飞牛部署与变更说明.md) —— 飞牛版构建链与变更说明；群晖版复用了它的 `fnos/sea/entry.js` 入口和套件图标。
 
 ## 许可
 
