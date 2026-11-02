@@ -154,7 +154,7 @@ server/web/dist/
 /usr/syno/bin/synopkg status qq-farm-bot     # 非交互 SSH 里 synopkg 不在 PATH，必须写绝对路径
 ps -eo pid,user,args | grep appstore/qq-farm-bot/node | grep -v grep
 netstat -lntp | grep 3007
-tail -f /volume1/@appdata/qq-farm-bot/qq-farm-bot.log
+tail -f /var/packages/qq-farm-bot/var/qq-farm-bot.log   # var 是 DSM 软链，指向套件所在卷的 @appdata/<pkg>
 grep -a qq-farm-bot /var/log/synopkg.log | tail -20      # 安装链路：preinst → 解包 → postinst → start
 ```
 
