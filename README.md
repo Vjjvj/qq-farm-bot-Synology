@@ -16,7 +16,7 @@ QQ 农场助手的 **群晖 Synology DSM 原生套件（`.spk`）** 版本。
 
 ## 群晖版是什么样的
 
-- **DSM 原生套件**，不是 Docker。由套件中心统一安装、启停、升级（`INFO` 里 `ctl_stop="yes"`，重装/升级会走钩子）；重启 NAS 后是否自动拉起没做过实测，但脚本本身只依赖 DSM 的标准 `start` 调用。
+- **DSM 原生套件**，不是 Docker。由套件中心统一安装、启停、升级（`INFO` 里 `ctl_stop="yes"`，重装/升级会走钩子）。开机自启走 DSM 标准链路：套件中心会为本包生成 `pkgctl-qq-farm-bot.service`（实测 `enabled`，`WantedBy=syno-low-priority-packages.target`，`ExecStart` 调 `synopkgctl start`，与手动启动是同一个 `start-stop-status`）；这条链在机上取证过，但没做过真机重启验证。
 - **自带 Node.js 22 官方二进制**，不依赖套件中心的「Node.js」套件；后端是 esbuild 打出的两个纯 JS 文件（`bin/main.js`、`bin/worker.js`）。
 - **以普通包账号运行**：`conf/privilege` 只声明 `defaults.run-as="package"` + `username`/`groupname = sc-qq-farm-bot`，不声明任何 root 权限。DSM 7.2 会**直接拒绝**声明 root 的第三方包，连解包都不做——这是装机实测踩到的第一道墙，别照着官方套件文档加 `ctrl-script`。
 - **监听 TCP，默认放行局域网**：`0.0.0.0:3007`，浏览器直接开 `http://<群晖 IP>:3007/`。不走 `/webman/3rdparty/` 网关前缀（那个前缀只伺服静态文件，不是反向代理）。
