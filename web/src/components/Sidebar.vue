@@ -260,8 +260,8 @@ function selectAccount(acc: any) {
   showAccountDropdown.value = false
 }
 
-// 飞牛改动：侧栏左下角显示「fpk v<发布版本>」（构建时由 FPK_VERSION 注入）；本地开发显示「fpk dev」。Core 仍用上游 /api/ping 的 version。
-const fpkVersionText = __FPK_VERSION__ ? `fpk v${__FPK_VERSION__}` : 'fpk dev'
+// 侧栏左下角显示「spk v<发布版本>」（群晖构建时由 synology/build.sh 传入 FPK_VERSION=SPK_VERSION）；未注入时显示「spk dev」。Core 仍用上游 /api/ping 的 version。
+const fpkVersionText = __FPK_VERSION__ ? `spk v${__FPK_VERSION__}` : 'spk dev'
 const FNOS_REPO_URL = 'https://github.com/Maksim-venus/qq-farm-bot-fnos'
 
 watch(
@@ -322,7 +322,7 @@ watch(isSidebarCollapsed, closeFlyouts)
         <template #trigger>
           <div
             class="sidebar-control w-full flex items-center gap-3 overflow-hidden px-3 py-2.5"
-            :aria-label="isSidebarCollapsed ? `飞牛用户：${nasUserStore.user?.username || '飞牛用户'}` : undefined"
+            :aria-label="isSidebarCollapsed ? `群晖用户：${nasUserStore.user?.username || '群晖用户'}` : undefined"
           >
             <div class="farm-avatar-ring relative h-9 w-9 shrink-0 overflow-hidden rounded-full shadow-md" style="background: var(--ui-primary-fill); padding: 2px;">
               <div class="h-full w-full flex items-center justify-center overflow-hidden rounded-full bg-gray-200 dark:bg-gray-600">
@@ -334,19 +334,19 @@ watch(isSidebarCollapsed, closeFlyouts)
             </div>
             <div v-show="!isSidebarCollapsed" class="min-w-0 flex flex-col items-start">
               <span class="font-body w-full truncate text-left text-sm font-medium">
-                {{ nasUserStore.user?.username || '飞牛用户' }}
+                {{ nasUserStore.user?.username || '群晖用户' }}
               </span>
               <div class="mt-0.5 flex items-center gap-1.5">
                 <span class="admin-badge rounded-lg px-1.5 py-0.2 text-[10px] leading-tight font-medium">
-                  {{ nasUserStore.user?.isAdmin === false ? '飞牛用户' : '飞牛管理员' }}
+                  {{ nasUserStore.user?.isAdmin === false ? '群晖用户' : '群晖管理员' }}
                 </span>
               </div>
             </div>
           </div>
         </template>
         <div class="sidebar-tooltip-content">
-          <strong>{{ nasUserStore.user?.username || '飞牛用户' }}</strong>
-          <span>已通过飞牛登录</span>
+          <strong>{{ nasUserStore.user?.username || '群晖用户' }}</strong>
+          <span>群晖本机访问</span>
         </div>
       </NTooltip>
     </div>
@@ -544,7 +544,7 @@ watch(isSidebarCollapsed, closeFlyouts)
           </div>
           <div class="flex items-center justify-between opacity-50">
             <div class="flex items-center gap-2">
-              <!-- 飞牛改动：Web v → fpk v<版本>；GitHub 链到本 fork -->
+              <!-- 群晖版：Web v → spk v<包版本>；GitHub 链到本 fork -->
               <span>{{ fpkVersionText }}</span>
               <a
                 :href="FNOS_REPO_URL"
