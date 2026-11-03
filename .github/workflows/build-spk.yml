@@ -43,6 +43,8 @@ jobs:
     env:
       SPK_ARCH: ${{ matrix.spk_arch }}
       VERIFY_STATUS: ${{ matrix.status }}
+      # 把 pnpm 的 store 钉到工作区里，缓存路径才写得住（默认在 ~/.local/share 下，版本还会变）
+      npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
     steps:
       - uses: actions/checkout@v4
 
@@ -67,7 +69,24 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-          cache: pnpm
+          # 这里不开 cache: pnpm —— 那个步骤要调 pnpm 去问 store 路径，
+          # runner 上此时还没有 pnpm，会直接 "Unable to locate executable file: pnpm" 挂掉。
+          # pnpm 由下面的 corepack 装，依赖缓存单独用 actions/cache 管。
+
+      - name: 用 corepack 启用 pnpm
+        run: |
+          set -euo pipefail
+          # 版本认 package.json 的 packageManager 字段，别在 workflow 里再钉一遍
+          corepack enable
+          corepack install
+          pnpm --version
+
+      - name: 缓存 pnpm 依赖
+        uses: actions/cache@v4
+        with:
+          path: .pnpm-store          # 对应上面 npm_config_store_dir = workspace/.pnpm-store
+          key: pnpm-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: pnpm-
 
       - name: 缓存随包的官方 Node.js 发行包
         uses: actions/cache@v4
