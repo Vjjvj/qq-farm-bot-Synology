@@ -229,6 +229,9 @@ jobs:
       - name: 发布
         env:
           GH_TOKEN: ${{ github.token }}
+          # release 作业没有 checkout，当前目录不是 git 仓库；不显式给仓库，
+          # gh 会去翻 cwd 的 remote 然后 "fatal: not a git repository" 直接挂掉
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
