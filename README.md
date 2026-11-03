@@ -44,7 +44,7 @@ LOG_LEVEL="info"         # error / warn / info / debug
 
 **扫码登录要自己接原始项目那套前置**：本套件只把后端和面板跑起来，不含 QQ 登录服务。面板「设置 → 系统设置 → 登录设置」里 `QQ扫码登录` 默认关闭，`NapCat接口地址` / `NapCat接口签名` 留空时保存就报「开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名」。要先自行部署 `qq-miniapp-auth` 服务，怎么部署、两项怎么填看原始项目的说明（飞牛版那层文档里也没这段），参考链接：<https://github.com/liyangpengs/qq-farm-bot>。本仓库不重复、也不提供任何登录服务。
 
-架构选 `x86_64`（含 SA/DS 的 Intel-AMD 机型）或 `armv8`（rtd1296 / rtd1619 / armada37xx）。**装前确认 glibc**：Node 22 需要 ≥ 2.28，在群晖上跑 `echo x | /lib/libc.so.6 | head -1`（DSM 的 `/usr/bin/ldd --version` 没有任何输出，别看它）。`x86_64` 包已在 DSM 7.2.2-72806 Update 8 + SA6400（glibc 2.36）实机装成功并跑起任务；`armv8` 只是打包链参数化，尚未实机验证。
+架构选 `x86_64`（含 SA/DS 的 Intel-AMD 机型）或 `armv8`（rtd1296 / rtd1619 / armada37xx）。**装前确认 glibc**：Node 22 需要 ≥ 2.28，在群晖上跑 `echo x | /lib/libc.so.6 | head -1`（DSM 的 `/usr/bin/ldd --version` 没有任何输出，别看它）。`x86_64` 包已在 DSM 7.2.2-72806 Update 8 + SA6400（glibc 2.36；这台是 AMD EPYC 7002，`uname -m` 就是 `x86_64`，别被 Synology 大多用 ARM 的印象带偏）实机装成功并跑起任务，本地 `synology/build.sh` 出的包和 GitHub Actions 出的包都装过；`armv8` 只跑到 CI 打包与结构自检，没在任何 armv8 机型上装过——**CI 绿不等于装机通过**。
 
 卸载：`/var/packages/qq-farm-bot/var/`（数据目录，本机即 `/volume1/@appdata/qq-farm-bot`）里的账号、登录态和日志**实测在卸载后仍然保留**（连装带卸三个版本来回，`data/logs/` 里最早的日志还在）。但套件中心的卸载弹窗若勾选了删除套件数据则会清空，动手前自己备份这个目录。
 
