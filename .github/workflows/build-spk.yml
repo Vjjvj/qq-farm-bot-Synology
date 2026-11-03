@@ -1,0 +1,233 @@
+name: build-spk
+
+# 在 ubuntu runner 上出群晖 DSM 原生 .spk。
+# build.sh 的「只能在 Linux 上构建」是针对 Windows 丢可执行位说的，runner 正好是 Linux + GNU tar。
+# armv8 只是换一颗官方 Node 二进制，前后端产物都是纯 JS，因此不需要交叉编译；
+# 但 armv8 包从未在真机装过，Release 里按实际状态标注，不因为 CI 绿了就当已支持。
+
+on:
+  push:
+    tags:
+      - 'spk-*'          # tag 尾串就是 DSM 版本号，例：spk-2026.11.03-1
+  workflow_dispatch:
+    inputs:
+      spk_version:
+        description: 'SPK 版本号，留空则用「上海日期-<run number>」，例 2026.11.03-1'
+        required: false
+        type: string
+      publish_release:
+        description: '跑完顺带发布 GitHub Release（会创建 spk-<版本> tag）'
+        required: false
+        type: boolean
+        default: false
+
+permissions:
+  contents: write
+
+concurrency:
+  group: spk-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 25
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - spk_arch: x86_64
+            status: '已实机验证：SA6400 / DSM 7.2.2-72806 Update 8（glibc 2.36）安装、运行、连续三次原地升级都通过。'
+          - spk_arch: armv8
+            status: '未实机验证：只是打包链跑出来的包，rtd1296 / rtd1619 / armada37xx 机型一台都没装过，先按 glibc 要求自查再动手。'
+    env:
+      SPK_ARCH: ${{ matrix.spk_arch }}
+      VERIFY_STATUS: ${{ matrix.status }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 定版本号
+        id: meta
+        env:
+          DISPATCH_VERSION: ${{ inputs.spk_version }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            ver="${GITHUB_REF_NAME#spk-}"
+          else
+            ver="${DISPATCH_VERSION}"
+            [ -n "${ver}" ] || ver="$(TZ=Asia/Shanghai date '+%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
+          fi
+          # DSM 把版本号当「主版本-feature build」两段比较，格式不合装机时会被拒
+          echo "${ver}" | grep -Eq '^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}-[0-9]+$' || {
+            echo "版本号 ${ver} 不符合 YYYY.MM.DD-N" >&2; exit 1; }
+          echo "version=${ver}" >>"$GITHUB_OUTPUT"
+          echo "SPK_VERSION=${ver}" >>"$GITHUB_ENV"
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: pnpm
+
+      - name: 缓存随包的官方 Node.js 发行包
+        uses: actions/cache@v4
+        with:
+          path: .spk-cache
+          key: spk-node-${{ matrix.spk_arch }}-${{ hashFiles('synology/build.sh') }}
+
+      - name: 出包
+        env:
+          MAINTAINER: Vjjvj
+          NODE_CACHE_DIR: ${{ github.workspace }}/.spk-cache
+        run: bash synology/build.sh
+
+      - name: 装机前自检（移植指南 §11.5）
+        run: |
+          set -euo pipefail
+          OUT="${GITHUB_WORKSPACE}/synology/out"
+          SPK="${OUT}/qq-farm-bot_${SPK_VERSION}_${SPK_ARCH}.spk"
+          test -f "${SPK}"
+          ( cd "${OUT}" && sha256sum -c "qq-farm-bot_${SPK_VERSION}_${SPK_ARCH}.spk.sha256" )
+
+          V="${RUNNER_TEMP}/check-${SPK_ARCH}"
+          rm -rf "${V}"; mkdir -p "${V}/payload"
+          tar xf "${SPK}" -C "${V}"
+
+          # 外层是不压缩 tar 且 INFO 必须在最前；内层成员名带 ./ 前缀，两层规则不同
+          # （列成员不要写成 `tar tf | head -1`：head 提前退出会给 tar 送 SIGPIPE，pipefail 下直接判失败）
+          tar tf "${SPK}" > "${RUNNER_TEMP}/outer-list.txt"
+          IFS= read -r outer_first < "${RUNNER_TEMP}/outer-list.txt"
+          [ "${outer_first}" = "INFO" ]
+          tar tzf "${V}/package.tgz" > "${RUNNER_TEMP}/inner-list.txt"
+          IFS= read -r inner_first < "${RUNNER_TEMP}/inner-list.txt"
+          case "${inner_first}" in
+            ./*) ;;
+            *) echo "内层成员名没有 ./ 前缀，首个是 ${inner_first}" >&2; exit 1 ;;
+          esac
+
+          # INFO 自述与实际一致
+          info_sum="$(sed -n 's/^checksum="\([^"]*\)".*/\1/p' "${V}/INFO")"
+          real_sum="$(md5sum "${V}/package.tgz" | cut -d' ' -f1)"
+          [ "${info_sum}" = "${real_sum}" ] || { echo "INFO.checksum 与 package.tgz 实测 md5 不符" >&2; exit 1; }
+          grep -q "^version=\"${SPK_VERSION}\"$" "${V}/INFO"
+          grep -q "^arch=\"${SPK_ARCH}\"$" "${V}/INFO"
+
+          # 第三方包声明 root 会被 DSM 7.2 直接拒装，这里当回归门看
+          node -e '
+            const fs = require("fs");
+            const j = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
+            if (j.defaults["run-as"] !== "package") throw new Error("run-as 不是 package");
+            if (/root/.test(JSON.stringify(j))) throw new Error("privilege 里出现 root");
+            console.log("privilege OK:", j.username, j.groupname);
+          ' "${V}/conf/privilege"
+
+          for f in "${V}"/scripts/*; do
+            sh -n "${f}"
+            [ "$(stat -c '%a' "${f}")" = "755" ] || { echo "钩子权限不是 755: ${f}" >&2; exit 1; }
+          done
+
+          tar xzf "${V}/package.tgz" -C "${V}/payload"
+          node --check "${V}/payload/server/bin/main.js"
+          node --check "${V}/payload/server/bin/worker.js"
+
+          # 飞牛的 TCP 锁与原生标记都不能带进群晖包（main.js 里读取该标记的代码分支属上游原样，不算）
+          if grep -q "QQ_FARM_NO_TCP = " "${V}/payload/server/bin/main.js" "${V}/payload/server/bin/worker.js"; then
+            echo "产物里混入 QQ_FARM_NO_TCP 赋值" >&2; exit 1;
+          fi
+          [ -z "$(find "${V}/payload" -name FNOS_NATIVE)" ]
+
+          # 群晖版挂在站点根路径，不是 /webman/3rdparty/ 网关前缀
+          grep -q 'src="/assets/' "${V}/payload/server/web/dist/index.html"
+          if grep -q "webman/3rdparty" "${V}/payload/server/web/dist/index.html"; then
+            echo "前端资源被打了网关前缀" >&2; exit 1;
+          fi
+
+          # 随包 node 需要的最低 glibc —— 装机前那句 /lib/libc.so.6 自查的硬对应值
+          glibc_req="$(readelf -V "${V}/payload/node/bin/node" | grep -o 'GLIBC_[0-9.]*' | sort -V | tail -1 || true)"
+          [ -n "${glibc_req}" ] || { echo "读不出 glibc 需求" >&2; exit 1; }
+          glibc_req="${glibc_req#GLIBC_}"
+          if [ "${SPK_ARCH}" = "x86_64" ]; then
+            "${V}/payload/node/bin/node" -v          # 只有本架构 runner 才跑得动这颗 node
+          fi
+
+          {
+            echo "### ${SPK_ARCH}"
+            echo "- 版本：${SPK_VERSION}（$(du -h "${SPK}" | cut -f1)，$(sed -n 's/^runtime=//p' "${V}/payload/BUILD_INFO")）"
+            echo "- sha256：$(cut -d' ' -f1 "${SPK}.sha256")"
+            echo "- 随包 Node 要求的 glibc：≥ ${glibc_req}"
+            echo "- 自检：sha256 / 外层成员顺序 / INFO.checksum / privilege / 七钩子 sh -n + 755 / node --check / 无 TCP 锁与飞牛标记 / 资源挂根路径 —— 全部通过"
+            echo "- ${VERIFY_STATUS}"
+          } > "${GITHUB_WORKSPACE}/report-${SPK_ARCH}.md"
+          cat "${GITHUB_WORKSPACE}/report-${SPK_ARCH}.md"
+
+      - name: 收产物
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp synology/out/"qq-farm-bot_${SPK_VERSION}_${SPK_ARCH}".spk{,.sha256} dist/
+          cp "report-${SPK_ARCH}.md" dist/
+          # 只把解出来的 node 存进缓存，tar.gz 与 SHASUMS 是下载中间物（build.sh 见到 bin/node 就跳过下载）
+          rm -f .spk-cache/*.tar.gz .spk-cache/SHASUMS256-*.txt
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: spk-${{ matrix.spk_arch }}-${{ steps.meta.outputs.version }}
+          path: dist/
+          if-no-files-found: error
+
+  release:
+    needs: build
+    if: ${{ github.event_name == 'push' || github.event.inputs.publish_release == 'true' }}
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: spk-*
+          merge-multiple: true
+          path: dist
+
+      - name: 组发布说明
+        run: |
+          set -euo pipefail
+          set -- dist/*.spk
+          ver="$(basename "$1" | sed 's/^qq-farm-bot_//; s/_[a-z0-9_]*\.spk$//')"
+          {
+            echo "群晖 DSM 原生套件（\`.spk\`）。装法与配置见仓库 README。"
+            echo
+            # 已实机验证的架构排在前面，glob 的字母序会把 armv8 顶到第一行
+            for a in x86_64 armv8; do
+              if [ -f "dist/report-${a}.md" ]; then cat "dist/report-${a}.md"; fi
+            done
+            echo
+            echo "### 装之前自查三件事"
+            echo "- 在群晖上跑 \`echo x | /lib/libc.so.6 | head -1\`，确认 glibc 不低于上面每个包标的需求值（DSM 的 \`ldd --version\` 没有输出，别看它）。"
+            echo "- 应用没有登录页：安装后默认监听 \`0.0.0.0:3007\`，同网段任何设备都能开面板。想只留本机改 \`/var/packages/qq-farm-bot/var/settings.conf\` 里的 \`ADMIN_HOST=\"127.0.0.1\"\`，改完在套件中心重启套件。"
+            echo "- 套件每次重启（升级、改配置、重启 NAS）后已保存的 QQ 登录 Code 会失效，要逐个账号重新扫码；扫码登录还要自己接外部登录服务，见 README。"
+          } > body.md
+          echo "SPK_RELEASE_VERSION=${ver}" >>"$GITHUB_ENV"
+          cat body.md
+
+      - name: 发布
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+            tag="${GITHUB_REF_NAME}"
+            target_args=()
+          else
+            # 手动触发且要发布时补一个 tag，让每个对外产物都有对应提交
+            tag="spk-${SPK_RELEASE_VERSION}"
+            target_args=(--target "${GITHUB_SHA}")
+          fi
+          # 重跑同一个 tag 时不改已有 Release 的tag指向，只覆盖同名产物与说明
+          if gh release view "${tag}" >/dev/null 2>&1; then
+            gh release edit "${tag}" --notes-file body.md --title "qq-farm-bot ${SPK_RELEASE_VERSION}"
+            gh release upload "${tag}" dist/*.spk dist/*.spk.sha256 --clobber
+          else
+            gh release create "${tag}" "${target_args[@]}" \
+              --notes-file body.md \
+              --title "qq-farm-bot ${SPK_RELEASE_VERSION}" \
+              dist/*.spk dist/*.spk.sha256
+          fi
+          gh release view "${tag}" --json tagName,assets -q '.tagName + "  " + ([.assets[].name] | join(" "))'
