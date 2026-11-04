@@ -131,6 +131,7 @@ SPK_VERSION=2026.11.2-3 synology/build.sh      # 指定版本号
 ## 项目文档
 
 - [`docs/synology-build.md`](docs/synology-build.md) —— 群晖出包教程：构建机准备、传代码、产物自检、失败对照。
+- [`docs/upstream-sync.md`](docs/upstream-sync.md) —— 同步上游的操作清单：冲突面预演、用 merge 不用 rebase、合并后验证。
 - [`docs/`](docs/README.md) —— 协议研究、配置存储、网络并发模型等专题文档索引。
 - [`synology/`](synology/build.sh) —— 群晖打包链：`build.sh` + `conf/privilege` + `scripts/` 生命周期钩子。
 - [`fnos/`](fnos/飞牛部署与变更说明.md) —— 飞牛版构建链与变更说明；群晖版复用了它的 `fnos/sea/entry.js` 入口和套件图标。
