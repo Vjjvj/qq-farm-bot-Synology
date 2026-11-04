@@ -31,7 +31,7 @@ git diff --name-only "$base" master            # 本地补丁碰过的文件
 git diff --name-only "$base" upstream/master   # 上游改过的文件
 ```
 
-两份名单的交集就是冲突面；交集为空，直接 `git merge upstream/master` 不会有冲突。
+两份名单的交集就是冲突面；交集为空，直接 `git merge upstream/master` 不会有冲突（2026-11-04 那次交集为空，合并确实一条冲突都没有）。
 
 **合并**（用 merge，不要 rebase，理由见第 3 节）：
 
@@ -59,15 +59,51 @@ pnpm -C web build
 | 路径 | 本地改了什么 | 上游会碰吗 | 冲突时怎么办 |
 | --- | --- | --- | --- |
 | `synology/`、`.github/`、`docs/synology-build.md` | 群晖打包链 | **从不**（`git rev-list --count upstream/master -- <路径>` 当前为 0） | 不会冲突，不用检查 |
-| `README.md`（根） | 群晖化：安装步骤、出包、版本号规则、实机验证状态 | 每次发版都写 | 2026-11-03 那次合并的唯一冲突就在这；按语义合并，别整段取一边 |
-| `docs/README.md` | 索引里加了群晖相关行 | 新增专题文档时 | 单行，手工并排 |
+| `README.md`（根） | 群晖化：安装步骤、出包、版本号规则、实机验证状态。「上游同步说明」那段每次同步都得重写，写法见第 6 节 | 每次发版都写 | 解法见第 5 节；2026-11-03 那次合并的唯一冲突就在这 |
+| `docs/README.md` | 索引里加了群晖相关行，新增文档时要登记 | 新增专题文档时 | 单行，手工并排 |
 | `web/src/components/Sidebar.vue` | 5 处文案：飞牛字样改群晖、`fpk v…` → `spk v…`、开源地址指本 fork | 会（账号下拉、布局调整） | **按语义找，别按行号**——上游加个类名行号就漂了 |
 | `fnos/sea/` | 群晖版复用它的 esbuild 打包参数 | 碰过 1 次（SEA 引入） | 一般不冲突；改 `synology/build.sh` 前 diff 一眼 |
 | 三个 `package.json` | 上游自己按日期改版本号 | 每次发版 | 自动合并，取上游值 |
 
 只在群晖版存在的新文档，文件本身不会撞；要留意的是把它登记进索引的那一两行。
 
-## 5. 合并之后
+## 5. 冲突怎么解
+
+这个仓库的冲突基本都是**文案冲突**，不是逻辑冲突，两边都要留。
+
+```sh
+git status                              # 未合并的文件列在 Unmerged paths（UU）
+git diff --name-only --diff-filter=U    # 只要文件名
+```
+
+- 打开文件，找 `<<<<<<<` / `=======` / `>>>>>>>` 三行标记，把两段手工合成一段。**不要用 `git checkout --ours` / `--theirs`**——那会整段丢掉一边，`README.md` 和 `Sidebar.vue` 这种纯文案文件每次都会丢。
+- 上游和我们改的是同一行 import 或同一组类名 → 两边都保留，合完用 `pnpm -C web typecheck` 确认没漏。这类情况在飞牛侧发生过两次，记在 `fnos/飞牛部署与变更说明.md`：`2026.11.3` 撞在 `core/src/core/worker.ts` 的 API 分发表，`2026.11.4` 撞在 `MilkTeaContent.vue` 的 import 行，两边都保留了。
+- 全部解完再 `git add <那个文件>`，然后 `git commit`（默认合并信息即可）。别用 `git commit -a`，也别为了过检 `--no-verify`。
+- 中途想收手：`git merge --abort`，工作区回到合并前。
+- 解完必须重跑第 2 节那四条验证。冲突解错最常见的表现是测试挂或 `vue-tsc` 报错，而不是构建不出来。
+
+## 6. 合并之后
+
+**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-04 那次（合并提交 `1ca9842`）的填法：
+
+| 要素 | 填什么 |
+| --- | --- |
+| 上游到哪个提交 | `4973e13` |
+| 对应的飞牛版本号 | `2026.11.4`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
+| 本仓库的合并提交号 | `1ca9842` |
+| 带进来哪些用户可见变化 | 藏品礼包可使用；珍藏室升级 / 领奖 / 展示；蓝晶土地补到 6 级、升级条件改用官方字段；商城与奶茶兑换商店的可选数量上限同时受限购剩余与当前余额 |
+| `core` / `web` 的 `package.json` 是否变 | 未变，仍是 `20261102`——这条要实读两个 `package.json` 再写，不能按「上游发版就会 bump」推 |
+| 验证到哪一步 | 四条命令通过（core 402、web 48、`vue-tsc` 无输出、`web build` 成功）；**没有用真号验证过**，上游自己也只做到安装包冒烟 |
+
+写的时候三条纪律：
+
+- 「合并提交就是安装包的 `source_commit`」是飞牛那边的说法，我们的 `.spk` 版本号与它无关，见下一条。
+- 只写实际发生过的：没验证就写「没验证」；代码位置给文件名 + 函数名，别写行号（行号会漂）。
+- PR 号可以写，但每个都要对着 `git log --oneline master..upstream/master` 核，不要凭记忆。
+
+**新增或删除专题文档时，索引两处都要改**：`docs/README.md` 的表格，以及根 README 的「项目文档」列表（前者自身的「维护约定」要求同时更新）。这两处也正是每次同步最容易撞的单行冲突——单行，手工并排就行。
+
+其余几项：
 
 - **版本号与上游脱钩**：`synology/build.sh` 里 `APP_VERSION="${SPK_VERSION:-$(TZ=Asia/Shanghai date '+%Y.%m.%d')-1}"`，跟上游 manifest 的 `version` 没关系。spk 版本必须是 `YYYY.MM.DD-N`（月日补零，同日再发递增 `-N`）——DSM 把它当「主版本-feature build」两段比较，`2026.11.4` 这种没后缀的会和飞牛包混在一起。
 - **上游带新依赖**（`pnpm-lock.yaml` 变了）：本机先 `pnpm install --frozen-lockfile`；CI 的依赖缓存 key 走 `hashFiles('pnpm-lock.yaml')`，会自动换新，不用手动清。
@@ -75,7 +111,7 @@ pnpm -C web build
 - **armv8 仍是未实机验证**：上游改动不会因为 CI 变绿就变成「armv8 已支持」。
 - **提交和推送是两次授权**：合并完先报状态，别自己 `git push`。
 
-## 6. 别做
+## 7. 别做
 
 - `git push --force`，或对已推送的 `master` 做 rebase。
 - 把上游 tag（如 `v2026.11.4-fnos`）当本仓库的发布 tag；我们的发布 tag 前缀固定 `spk-`。
