@@ -23,6 +23,12 @@ git rev-list --left-right --count master...upstream/master   # 左=本地独有�
 git log --oneline master..upstream/master                    # 上游这批具体改了什么
 ```
 
+本机 `git fetch` 走 schannel 时可能报 `schannel: AcquireCredentialsHandle failed: SEC_E_NO_CREDENTIALS (0x8009030e)`，这不是网络或代理的问题（`.gitconfig` 里的 `http.https://github.com/.proxy` 照常可用），换 TLS 后端即可：
+
+```sh
+git -c http.sslBackend=openssl fetch upstream --tags
+```
+
 **判断会不会冲突**（这一步别省，先算再合）：
 
 ```sh
@@ -31,7 +37,7 @@ git diff --name-only "$base" master            # 本地补丁碰过的文件
 git diff --name-only "$base" upstream/master   # 上游改过的文件
 ```
 
-两份名单的交集就是冲突面；交集为空，直接 `git merge upstream/master` 不会有冲突（2026-11-04 那次交集为空，合并确实一条冲突都没有）。
+两份名单的交集就是冲突面；交集为空，直接 `git merge upstream/master` 不会有冲突（2026-11-04 与 2026-11-07 两次交集都为空，合并都没有冲突）。
 
 **合并**（用 merge，不要 rebase，理由见第 3 节）：
 
@@ -39,7 +45,9 @@ git diff --name-only "$base" upstream/master   # 上游改过的文件
 git merge upstream/master
 ```
 
-**验证，四条都要过**。2026-11-04 那次合并的实测：core 402 通过、web 48 通过、`vue-tsc` 无输出、`web build` 成功。
+**验证，四条都要过**。2026-11-07 那次合并（上游 `2bdcf37`）的实测：core 402 通过、web 48 通过、`vue-tsc` 无输出、`web build` 成功。
+
+Windows 上跑这四条有两个坑，都不是代码问题：`node --test` 要派生带管道的子进程，沙箱/受限令牌下会以 `spawn EPERM` 挂在每个测试文件上（core 会「全部失败」，看着像合并炸了）；`web build` 的 esbuild 清理临时目录时可能报 `Access is denied`。把 `TEMP`/`TMP` 指到工作区内再跑，或直接在完整权限下跑，就能过。
 
 ```sh
 pnpm -C core test          # 内部先 build:ts 再 node --test
@@ -84,15 +92,15 @@ git diff --name-only --diff-filter=U    # 只要文件名
 
 ## 6. 合并之后
 
-**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-04 那次（合并提交 `1ca9842`）的填法：
+**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-07 那次（合并提交 `d82df10`）的填法：
 
 | 要素 | 填什么 |
 | --- | --- |
-| 上游到哪个提交 | `4973e13` |
-| 对应的飞牛版本号 | `2026.11.4`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
-| 本仓库的合并提交号 | `1ca9842` |
-| 带进来哪些用户可见变化 | 藏品礼包可使用；珍藏室升级 / 领奖 / 展示；蓝晶土地补到 6 级、升级条件改用官方字段；商城与奶茶兑换商店的可选数量上限同时受限购剩余与当前余额 |
-| `core` / `web` 的 `package.json` 是否变 | 未变，仍是 `20261102`——这条要实读两个 `package.json` 再写，不能按「上游发版就会 bump」推 |
+| 上游到哪个提交 | `2bdcf37` |
+| 对应的飞牛版本号 | `2026.11.7`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
+| 本仓库的合并提交号 | `d82df10` |
+| 带进来哪些用户可见变化 | 种植延迟 / 偷菜延迟真正生效（首块与首位可偷立即执行，其余按配置间隔，等待期间释放自动化锁，正常访友间隔 200–350ms）；设置页两项延迟加上限；奶茶无员工时雇佣页不再报错；奶茶详情直接切侧栏不再白屏；快乐不独享奖励展示与奶茶布局重做；客户端 / 微信版本升到 `1.16.3.8_20261028`，TSDK wasm 更新 |
+| `core` / `web` 的 `package.json` 是否变 | 变了，三个 `package.json`（含根）都从 `20261102` 升到 `20261104`——这条要实读再写，不能按「上游发版就会 bump」推 |
 | 验证到哪一步 | 四条命令通过（core 402、web 48、`vue-tsc` 无输出、`web build` 成功）；**没有用真号验证过**，上游自己也只做到安装包冒烟 |
 
 写的时候三条纪律：
