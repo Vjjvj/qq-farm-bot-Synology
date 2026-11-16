@@ -3,6 +3,28 @@ import { ref } from 'vue'
 import api, { getApiErrorMessage } from '@/api'
 
 export interface AutomationConfig {
+  ranch_harvest?: boolean
+  ranch_produce?: boolean
+  ranch_buy?: boolean
+  ranch_upgrade?: boolean
+  ranch_sell?: boolean
+  ranch_grass?: boolean
+  ranch_grass_buy?: boolean
+  ranch_fill_cans?: boolean
+  ranch_feed_normal?: boolean
+  ranch_feed_organic?: boolean
+  ranch_clean?: boolean
+  ranch_stroke?: boolean
+  ranch_friend_steal?: boolean
+  ranch_friend_clean?: boolean
+  ranch_friend_mosquito?: boolean
+  ranch_task?: boolean
+  ranch_share?: boolean
+  ranch_check_minutes?: number
+  ranch_strategy?: string
+  ranch_bag_fallback?: string
+  ranch_coop_animal?: number
+  ranch_shed_animal?: number
   farm?: boolean
   farm_harvest_tiangong?: boolean
   farm_push?: boolean
@@ -75,11 +97,89 @@ function lockLightUi(ui: UIConfig | undefined | null): UIConfig {
   return { ...(ui || {}), theme: 'light' }
 }
 
+// [fnos-fork] 2026-11-16 牧场增强 / 牧草地（与 utils/fnos-ranch.ts 相同；此处内联，store 不多依赖其他模块）
+export interface FnosRanch {
+  altHold: boolean
+  altHoldFallbackMinutes: number
+  illustratedAutoClaim: boolean
+  illustratedAutoComplete: boolean
+  friendFeed: boolean
+  friendFeedPerTime: number
+  friendFeedGoldKeep: number
+  friendHelpProduce: boolean
+}
+
+const FNOS_RANCH_DEFAULT: FnosRanch = {
+  altHold: true,
+  altHoldFallbackMinutes: 60,
+  illustratedAutoClaim: false,
+  illustratedAutoComplete: false,
+  friendFeed: false,
+  friendFeedPerTime: 10,
+  friendFeedGoldKeep: 10000,
+  friendHelpProduce: false,
+}
+
+const RANGES: Partial<Record<keyof FnosRanch, [number, number]>> = {
+  altHoldFallbackMinutes: [5, 720],
+  friendFeedPerTime: [1, 500],
+  friendFeedGoldKeep: [0, 999999999],
+}
+
+function clamp(value: unknown, min: number, max: number, fallback: number): number {
+  const n = Number.parseInt(String(value), 10)
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback
+}
+
+function fnosNormalizeRanch(input: unknown): FnosRanch {
+  const src: Record<string, any> = input && typeof input === 'object' ? input as Record<string, any> : {}
+  const out: any = {}
+  for (const key of Object.keys(FNOS_RANCH_DEFAULT) as (keyof FnosRanch)[]) {
+    const d = FNOS_RANCH_DEFAULT[key]
+    const range = RANGES[key]
+    if (range)
+      out[key] = clamp(src[key] ?? d, range[0], range[1], d as number)
+    else out[key] = src[key] !== undefined ? !!src[key] : d
+  }
+  return out as FnosRanch
+}
+
+export interface FnosGrassLands { count: number, autoBuy: boolean }
+
+function fnosNormalizeGrassLands(input: unknown): FnosGrassLands {
+  const src: Record<string, any> = input && typeof input === 'object' ? input as Record<string, any> : {}
+  return {
+    count: clamp(src.count ?? 0, 0, 24, 0),
+    autoBuy: src.autoBuy !== undefined ? !!src.autoBuy : true,
+  }
+}
+
 // [fnos-fork] 图鉴自动设置（与 utils/fnos-illustrated-auto.ts 相同；此处内联，store 不多依赖其他模块）
 export interface FnosIllustratedAuto { autoClaimRewards: boolean, autoComplete: boolean }
 function fnosNormalizeIllustratedAuto(input: any): FnosIllustratedAuto {
   const src = input && typeof input === 'object' ? input : {}
   return { autoClaimRewards: src.autoClaimRewards !== undefined ? !!src.autoClaimRewards : false, autoComplete: src.autoComplete !== undefined ? !!src.autoComplete : false }
+}
+
+// [fnos-fork] 2026-11-16 自己收菜优先 / 空闲时只保留心跳（与 utils/fnos-quiet-priority.ts 相同；此处内联，store 不多依赖其他模块）
+export interface FnosQuietPriority { ownHarvestFirst: boolean, mergeWindowSec: number, idleKeepaliveOnly: boolean, idleMinMinutes: number, idleMaxMinutes: number }
+function fnosQuietInt(src: any, key: string, min: number, max: number, fallback: number): number {
+  const n = Number.parseInt(String(src?.[key] ?? ''), 10)
+  return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback
+}
+function fnosNormalizeQuietPriority(input: any): FnosQuietPriority {
+  const src = input && typeof input === 'object' ? input : {}
+  let idleMinMinutes = fnosQuietInt(src, 'idleMinMinutes', 1, 180, 1)
+  let idleMaxMinutes = fnosQuietInt(src, 'idleMaxMinutes', 1, 180, 10)
+  if (idleMinMinutes > idleMaxMinutes)
+    [idleMinMinutes, idleMaxMinutes] = [idleMaxMinutes, idleMinMinutes]
+  return {
+    ownHarvestFirst: src.ownHarvestFirst !== undefined ? !!src.ownHarvestFirst : true,
+    mergeWindowSec: fnosQuietInt(src, 'mergeWindowSec', 0, 30, 10),
+    idleKeepaliveOnly: src.idleKeepaliveOnly !== undefined ? !!src.idleKeepaliveOnly : false,
+    idleMinMinutes,
+    idleMaxMinutes,
+  }
 }
 
 export interface SettingsState {
@@ -110,6 +210,12 @@ export interface SettingsState {
   autoAcceptHarvestStealSteal: number
   /** [fnos-fork] 图鉴奖励自动领取 / 自动完成图鉴（2026-11-15 起在「自动控制」里随设置一起保存） */
   fnosIllustratedAuto: FnosIllustratedAuto
+  /** [fnos-fork] 2026-11-16 自己收菜优先 / 空闲时只保留心跳（「自动控制」里随设置一起保存） */
+  fnosQuietPriority: FnosQuietPriority
+  /** [fnos-fork] 2026-11-16 牧场增强（牧场空间「自动控制」） */
+  fnosRanch: FnosRanch
+  /** [fnos-fork] 2026-11-16 最后 X 块地只种牧草（农场「自动控制」） */
+  fnosGrassLands: FnosGrassLands
 }
 
 type SaveableSettingsKey
@@ -137,6 +243,9 @@ type SaveableSettingsKey
     | 'autoAcceptHarvestStealHarvest'
     | 'autoAcceptHarvestStealSteal'
     | 'fnosIllustratedAuto' // [fnos-fork]
+    | 'fnosQuietPriority' // [fnos-fork]
+    | 'fnosRanch' // [fnos-fork]
+    | 'fnosGrassLands' // [fnos-fork]
 
 export type SettingsSavePayload = Partial<Pick<SettingsState, SaveableSettingsKey>>
 
@@ -165,6 +274,9 @@ const SAVEABLE_SETTINGS_KEYS: SaveableSettingsKey[] = [
   'autoAcceptHarvestStealHarvest',
   'autoAcceptHarvestStealSteal',
   'fnosIllustratedAuto', // [fnos-fork]
+  'fnosQuietPriority', // [fnos-fork]
+  'fnosRanch', // [fnos-fork]
+  'fnosGrassLands', // [fnos-fork]
 ]
 
 function createDefaultSettings(): SettingsState {
@@ -204,6 +316,9 @@ function createDefaultSettings(): SettingsState {
     autoAcceptHarvestStealHarvest: 8,
     autoAcceptHarvestStealSteal: 1,
     fnosIllustratedAuto: fnosNormalizeIllustratedAuto(null), // [fnos-fork]
+    fnosQuietPriority: fnosNormalizeQuietPriority(null), // [fnos-fork]
+    fnosRanch: fnosNormalizeRanch(null), // [fnos-fork]
+    fnosGrassLands: fnosNormalizeGrassLands(null), // [fnos-fork]
   }
 }
 
@@ -266,6 +381,9 @@ export const useSettingStore = defineStore('setting', () => {
       autoAcceptHarvestStealHarvest: data.autoAcceptHarvestStealHarvest ?? defaults.autoAcceptHarvestStealHarvest,
       autoAcceptHarvestStealSteal: data.autoAcceptHarvestStealSteal ?? defaults.autoAcceptHarvestStealSteal,
       fnosIllustratedAuto: fnosNormalizeIllustratedAuto(data.fnosIllustratedAuto), // [fnos-fork]
+      fnosQuietPriority: fnosNormalizeQuietPriority(data.fnosQuietPriority), // [fnos-fork]
+      fnosRanch: fnosNormalizeRanch(data.fnosRanch), // [fnos-fork]
+      fnosGrassLands: fnosNormalizeGrassLands(data.fnosGrassLands), // [fnos-fork]
     }
   }
 

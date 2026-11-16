@@ -3,6 +3,7 @@ export {};
 
 const sharedState = require('./shared-state');
 const { assertEmailClaimHour } = require('../../utils/hour-of-day');
+const { normalizeRanchSetting } = require('../../config/ranch-automation');
 const { readKnownFriendGidsCache, writeKnownFriendGidsCache } = require('./gid-cache');
 // [fnos-fork] 大号/小号
 const { normalizeFnosAltAccount } = require('../../services/farm/fnos-alt-account');
@@ -127,6 +128,9 @@ function getConfigSnapshot(accountId?: unknown): AccountConfig & { ui: typeof gl
         fnosAltAccount: { ...cfg.fnosAltAccount },
         fnosIllustratedAuto: { ...cfg.fnosIllustratedAuto }, // [fnos-fork] 图鉴奖励领取 / 自动完成图鉴
         fnosStealRatio: { ...cfg.fnosStealRatio }, // [fnos-fork] 偷收比
+        fnosQuietPriority: { ...cfg.fnosQuietPriority }, // [fnos-fork] 自己收菜优先 / 空闲时只保留心跳
+        fnosRanch: { ...cfg.fnosRanch }, // [fnos-fork] 2026-11-16 牧场增强
+        fnosGrassLands: { ...cfg.fnosGrassLands }, // [fnos-fork] 2026-11-16 最后 X 块地只种牧草
         ui: { ...globalConfig.ui },
     } as any;
 }
@@ -154,6 +158,8 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
                 (next.automation as any)[k] = allowed.includes(v as string) ? v : (next.automation as any)[k];
             } else if (k === 'fertilizer_land_types') {
                 (next.automation as any)[k] = normalizeFertilizerLandTypes(v, next.automation.fertilizer_land_types);
+            } else if (k.startsWith('ranch_')) {
+                (next.automation as any)[k] = normalizeRanchSetting(k, v);
             } else if (k === 'fertilizer_smart_seconds') {
                 (next.automation as any)[k] = Math.max(30, Math.min(3600, Number(v) || 300));
             } else {
@@ -306,6 +312,14 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
             try { require('../../services/fnos-illustrated-auto').onFnosIllustratedAutoConfigChanged(); } catch { /* ignore */ }
         }
     }
+    // [fnos-fork] 2026-11-16 牧场增强（等大号、图鉴、轮换值守、好友牧场）
+    if (cfg.fnosRanch !== undefined && cfg.fnosRanch !== null) {
+        next.fnosRanch = require('../../services/ranch/fnos-ranch').normalizeFnosRanch(cfg.fnosRanch, next.fnosRanch);
+    }
+    // [fnos-fork] 2026-11-16 最后 X 块地只种牧草
+    if (cfg.fnosGrassLands !== undefined && cfg.fnosGrassLands !== null) {
+        next.fnosGrassLands = require('../../services/farm/fnos-grass-lands').normalizeFnosGrassLands(cfg.fnosGrassLands, next.fnosGrassLands);
+    }
     // [fnos-fork] 偷收比
     if (cfg.fnosStealRatio !== undefined && cfg.fnosStealRatio !== null) {
         const beforeSteal = JSON.stringify(next.fnosStealRatio || null);
@@ -313,6 +327,11 @@ function applyConfigSnapshot(snapshot: Record<string, any> | undefined, options:
         if (JSON.stringify(next.fnosStealRatio) !== beforeSteal) {
             try { require('../../services/friend/fnos-steal-ratio').onFnosStealRatioConfigChanged(); } catch { /* ignore */ }
         }
+    }
+
+    // [fnos-fork] 2026-11-16 自己收菜优先 / 空闲时只保留心跳
+    if (cfg.fnosQuietPriority !== undefined && cfg.fnosQuietPriority !== null) {
+        next.fnosQuietPriority = require('../../services/fnos-quiet-priority').normalizeFnosQuietPriority(cfg.fnosQuietPriority, next.fnosQuietPriority);
     }
 
     setAccountConfigSnapshot(accountId, next, persist);

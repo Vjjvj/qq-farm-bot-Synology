@@ -126,6 +126,9 @@ function createDataProvider(options: DataProviderOptions) {
         getIllustratedSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getIllustratedSnapshot'),
         getCollectionsSnapshot: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getCollectionsSnapshot'),
         operateCollections: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateCollections', action, input),
+        getRanchState: (accountRef: string, view: string, shopId?: number, hostGid?: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getRanchState', view, shopId, hostGid),
+        prepareRanchAction: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'prepareRanchAction', action, input),
+        operateRanch: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateRanch', action, input),
         claimIllustratedRewards: (accountRef: string, type: number) => callWorkerApi(resolveAccountRefId(accountRef), 'claimIllustratedRewards', type),
         getSolarCalendar: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getSolarCalendar'),
         operateSolarCalendar: (accountRef: string, action: string, input: any) => callWorkerApi(resolveAccountRefId(accountRef), 'operateSolarCalendar', action, input),
@@ -336,6 +339,9 @@ function createDataProvider(options: DataProviderOptions) {
                 'fnosAltAccount', // [fnos-fork] 大号/小号
                 'fnosIllustratedAuto', // [fnos-fork] 图鉴奖励领取 / 自动完成图鉴
                 'fnosStealRatio', // [fnos-fork] 偷收比
+                'fnosQuietPriority', // [fnos-fork] 自己收菜优先 / 空闲时只保留心跳
+                'fnosRanch', // [fnos-fork] 2026-11-16 牧场增强
+                'fnosGrassLands', // [fnos-fork] 2026-11-16 最后 X 块地只种牧草
             ]) {
                 copyIfPresent(key);
             }

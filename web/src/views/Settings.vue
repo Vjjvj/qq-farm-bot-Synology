@@ -22,6 +22,8 @@ import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/ac
 import { useSettingStore } from '@/stores/setting'
 import { useStatusStore } from '@/stores/status'
 import { fnosNormalizeIllustratedAuto } from '@/utils/fnos-illustrated-auto' // [fnos-fork] 图鉴（自动控制）
+import { fnosNormalizeQuietPriority } from '@/utils/fnos-quiet-priority' // [fnos-fork] 自己收菜优先 / 空闲时只保留心跳（自动控制）
+import { fnosNormalizeGrassLands, fnosNormalizeRanch } from '@/utils/fnos-ranch' // [fnos-fork] 2026-11-16 牧场增强、牧草地
 import { fnosMoveIndex } from '@/utils/fnos-sort-order' // [fnos-fork]
 
 const fertilizerLandTypeOptions = [
@@ -35,6 +37,16 @@ const fertilizerLandTypeOptions = [
 
 const router = useRouter()
 const route = useRoute()
+const inRanch = computed(() => route.meta.gameSpace === 'ranch')
+const ranchAnimalOptions = ref<Array<{ value: number, label: string, kind: string }>>([])
+onMounted(async () => {
+  try {
+    const response = await api.get('/api/ranch/automation-options')
+    if (response.data.ok)
+      ranchAnimalOptions.value = response.data.data
+  }
+  catch (error) { showAlert(getApiErrorMessage(error, '牧场动物选项读取失败'), 'danger') }
+})
 const accountStore = useAccountStore()
 const settingStore = useSettingStore()
 const statusStore = useStatusStore()
@@ -917,6 +929,9 @@ const localAutomationSettings = ref({
   autoAcceptHarvestStealHarvest: 8,
   autoAcceptHarvestStealSteal: 1,
   fnosIllustratedAuto: fnosNormalizeIllustratedAuto(null), // [fnos-fork] 图鉴（2026-11-15 起在自动控制里）
+  fnosQuietPriority: fnosNormalizeQuietPriority(null), // [fnos-fork] 自己收菜优先 / 空闲时只保留心跳
+  fnosRanch: fnosNormalizeRanch(null), // [fnos-fork] 2026-11-16 牧场增强（牧场空间自动控制）
+  fnosGrassLands: fnosNormalizeGrassLands(null), // [fnos-fork] 2026-11-16 最后 X 块地只种牧草
 })
 
 const fertilizerOptions = [
@@ -1018,6 +1033,9 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.autoAcceptHarvestStealHarvest = settings.value.autoAcceptHarvestStealHarvest ?? 8
     localAutomationSettings.value.autoAcceptHarvestStealSteal = settings.value.autoAcceptHarvestStealSteal ?? 1
     localAutomationSettings.value.fnosIllustratedAuto = fnosNormalizeIllustratedAuto(settings.value.fnosIllustratedAuto) // [fnos-fork]
+    localAutomationSettings.value.fnosQuietPriority = fnosNormalizeQuietPriority(settings.value.fnosQuietPriority) // [fnos-fork]
+    localAutomationSettings.value.fnosRanch = fnosNormalizeRanch(settings.value.fnosRanch) // [fnos-fork] 2026-11-16
+    localAutomationSettings.value.fnosGrassLands = fnosNormalizeGrassLands(settings.value.fnosGrassLands) // [fnos-fork] 2026-11-16
   }
 }
 
@@ -1027,8 +1045,16 @@ async function saveAutomationSettings() {
     return
   automationSaving.value = true
   try {
-    const payload = JSON.parse(JSON.stringify(localAutomationSettings.value))
-    payload.automation.fertilizer_land_types = normalizeFertilizerLandTypes(payload.automation.fertilizer_land_types)
+    const source = localAutomationSettings.value
+    const automation = Object.fromEntries(Object.entries(source.automation).filter(([key]) => key.startsWith('ranch_') === inRanch.value))
+    // [fnos-fork] 2026-11-16 牧场空间只多带 fnosRanch；农场空间不带 fnosRanch（各存各的）
+    const payload = inRanch.value ? { automation, fnosRanch: fnosNormalizeRanch(source.fnosRanch) } : { ...JSON.parse(JSON.stringify(source)), automation }
+    if (!inRanch.value)
+      delete payload.fnosRanch
+    if (!inRanch.value)
+      payload.automation.fertilizer_land_types = normalizeFertilizerLandTypes(payload.automation.fertilizer_land_types)
+    if (!inRanch.value && payload.fnosQuietPriority)
+      payload.fnosQuietPriority = fnosNormalizeQuietPriority(payload.fnosQuietPriority) // [fnos-fork] 收拢分钟/秒数范围
     const res = await settingStore.saveSettings(accountId, payload)
     if (accountId !== currentAccountId.value)
       return
@@ -1037,7 +1063,7 @@ async function saveAutomationSettings() {
       showAlert('自动控制设置已保存', 'primary')
 
       // 如果启用了自动购买化肥，立即检测并购买
-      if (payload.automation.fertilizer_buy_organic || payload.automation.fertilizer_buy_normal) {
+      if (!inRanch.value && (payload.automation.fertilizer_buy_organic || payload.automation.fertilizer_buy_normal)) {
         try {
           const buyRes = await api.post('/api/fertilizer/check-and-buy', {
             buyOrganic: payload.automation.fertilizer_buy_organic,
@@ -1637,7 +1663,7 @@ async function handleResetSystemConfig() {
         </div>
 
         <!-- 策略设置 -->
-        <div v-else-if="activeTab === 'strategy'" class="space-y-4">
+        <div v-else-if="activeTab === 'strategy' && !inRanch" class="space-y-4">
           <div class="flex items-center justify-between">
             <h3 class="flex items-center gap-2 text-lg text-gray-900 font-bold dark:text-gray-100">
               <div class="i-fas-cog text-lg" />
@@ -1900,6 +1926,29 @@ async function handleResetSystemConfig() {
           </div>
         </div>
 
+        <div v-else-if="activeTab === 'strategy' && inRanch" class="space-y-4">
+          <h3 class="text-lg font-bold">
+            养殖策略
+          </h3>
+          <p v-if="settingsLoading">
+            加载中...
+          </p>
+          <p v-else-if="!currentAccountId || loadedAccountId !== currentAccountId">
+            请先选择并加载账号
+          </p>
+          <AutomationSettingsForm
+            v-else
+            v-model="localAutomationSettings"
+            in-ranch
+            panel="strategy"
+            :ranch-animal-options="ranchAnimalOptions"
+            :saving="automationSaving"
+            :fertilizer-land-type-options="fertilizerLandTypeOptions"
+            :fertilizer-options="fertilizerOptions"
+            @save="saveAutomationSettings"
+          />
+        </div>
+
         <!-- 自动控制 -->
         <div v-else-if="activeTab === 'automation'" class="space-y-4">
           <div class="flex items-center justify-between">
@@ -1925,6 +1974,8 @@ async function handleResetSystemConfig() {
             v-else
             v-model="localAutomationSettings"
             :saving="automationSaving"
+            :in-ranch="inRanch"
+            :ranch-animal-options="ranchAnimalOptions"
             :fertilizer-land-type-options="fertilizerLandTypeOptions"
             :fertilizer-options="fertilizerOptions"
             @save="saveAutomationSettings"

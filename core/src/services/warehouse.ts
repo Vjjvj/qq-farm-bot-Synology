@@ -674,9 +674,12 @@ async function sellAllFruits(): Promise<void> {
         const names: string[] = [];
         for (const item of items) {
             const id: number = toNum(item.id);
+            // 牧草也是农场果实，保留所有批次供牧草机使用。
+            if (id === 7001) continue;
             const count: number = toNum(item.count);
             const expireTime: number = getItemExpireTime(item);
             if (isFruitItemId(id) && count > 0
+                && id !== require('./farm/fnos-grass-lands').GRASS_FRUIT_ID // [fnos-fork] 2026-11-16 牧草不自动出售
                 && !isItemLocked(item)
                 && getEffectiveSellInfo(id, { ...baseContext, expireTime }).sellable) {
                 toSell.push(item);

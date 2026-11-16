@@ -1,3 +1,4 @@
+import type { RanchAutomationConfig } from '../config/ranch-automation';
 export {};
 export type PlantingStrategy =
   | 'preferred'
@@ -14,7 +15,7 @@ export type FertilizerMode = 'both' | 'normal' | 'organic' | 'smart' | 'none';
 
 export type FertilizerLandType = 'blue-crystal' | 'purple-gold' | 'gold' | 'black' | 'red' | 'normal';
 
-export interface AutomationConfig {
+export interface AutomationConfig extends RanchAutomationConfig {
   farm: boolean;
   farm_harvest_tiangong: boolean;
   farm_push: boolean;
@@ -130,6 +131,18 @@ export interface AccountConfig {
     /** [fnos-fork] 在线期间来偷菜的自动删除，缺省 false */
     autoDeleteOnlineStealer?: boolean;
   };
+  /** [fnos-fork] 2026-11-16 自己收菜优先 / 空闲时只保留心跳（见 services/fnos-quiet-priority.ts） */
+  fnosQuietPriority?: {
+    ownHarvestFirst: boolean;
+    mergeWindowSec: number;
+    idleKeepaliveOnly: boolean;
+    idleMinMinutes: number;
+    idleMaxMinutes: number;
+  };
+  /** [fnos-fork] 2026-11-16 牧场增强：小号等大号、图鉴、好友牧场帮生产/加牧草（见 services/ranch/fnos-ranch.ts） */
+  fnosRanch?: import('../services/ranch/fnos-ranch').FnosRanchConfig;
+  /** [fnos-fork] 2026-11-16 农场最后 X 块地只种牧草（见 services/farm/fnos-grass-lands.ts） */
+  fnosGrassLands?: import('../services/farm/fnos-grass-lands').FnosGrassLandsConfig;
 }
 
 export interface OfflineReminder {

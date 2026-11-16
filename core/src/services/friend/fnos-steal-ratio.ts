@@ -1038,7 +1038,7 @@ function startFnosStealRatio(scheduler: any, runExclusive: (name: string, fn: ()
     resetFnosStealRatioRuntime();
     // 登录成功回调里已经记过上线时刻时不要再记一次，否则会把时刻推晚并清掉基线
     if (!onlineSession || onlineSession.onlineSinceSec <= 0) noteFnosOnlineSession();
-    const tick = () => runExclusive('fnos_steal_ratio', () => runFnosStealRatioTick()).catch((e: any) => {
+    const tick = () => (require('../fnos-quiet-priority').isFnosIdleActive() ? Promise.resolve(null) /* 空闲时只保留心跳：本次跳过 */ : runExclusive('fnos_steal_ratio', () => runFnosStealRatioTick())).catch((e: any) => {
         try {
             require('../../utils/utils').logWarn('偷收比', `检查出错：${e && e.message ? e.message : e}`, {
                 module: 'friend', event: '偷收比', result: 'error',
@@ -1077,6 +1077,7 @@ function describeFnosStealRatio(cfg: FnosStealRatioConfig): string {
 }
 
 module.exports = {
+    loadAltRelationSnapshots, // [fnos-fork] 2026-11-16 fnos-ranch 大号优先巡查自己的小号牧场
     DEFAULT_FNOS_STEAL_RATIO,
     DEFAULT_THRESHOLD_PERCENT,
     CHECK_INTERVAL_MS,
