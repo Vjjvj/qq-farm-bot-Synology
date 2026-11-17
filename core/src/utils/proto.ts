@@ -42,6 +42,7 @@ async function loadProto(): Promise<void> {
         getResourcePath('proto', 'collectionpb.proto'),
         getResourcePath('proto', 'interactpb.proto'),
         getResourcePath('proto', 'activitypb.proto'),
+        getResourcePath('proto', 'muge.proto'),
         getResourcePath('proto', 'seasonpb.proto'),
         getResourcePath('proto', 'solartermspb.proto'),
         getResourcePath('proto', 'randomdroppb.proto'),
@@ -67,6 +68,9 @@ async function loadProto(): Promise<void> {
     types.EventMessage = root.lookupType('gatepb.EventMessage');
 
     types.AutumnOperateRequest = root.lookupType('gamepb.activitypb.AutumnOperateRequest');
+    for (const name of ['MugeListReply', 'MugeOperateRequest', 'MugeOperateReply']) {
+        types[name] = root.lookupType(`gamepb.activitypb.${name}`);
+    }
 
     types.MilkTeaOperateReply = root.lookupType('gamepb.activitypb.MilkTeaOperateReply');
     types.MilkTeaGetGroupReply = root.lookupType('gamepb.activitypb.MilkTeaGetGroupReply');
@@ -193,6 +197,7 @@ async function loadProto(): Promise<void> {
     types.GetIllustratedListV2Reply = root.lookupType('gamepb.illustratedpb.GetIllustratedListV2Reply');
     types.GetIllustratedLevelListV2Request = root.lookupType('gamepb.illustratedpb.GetIllustratedLevelListV2Request');
     types.GetIllustratedLevelListV2Reply = root.lookupType('gamepb.illustratedpb.GetIllustratedLevelListV2Reply');
+    types.IllustratedRewardRedDotNotifyV2 = root.lookupType('gamepb.illustratedpb.IllustratedRewardRedDotNotifyV2'); // [fnos-fork] 图鉴奖励红点：触发自动领取检查
     types.ClaimAllRewardsV2Request = root.lookupType('gamepb.illustratedpb.ClaimAllRewardsV2Request');
     types.ClaimAllRewardsV2Reply = root.lookupType('gamepb.illustratedpb.ClaimAllRewardsV2Reply');
     types.ClearNewUnlockedFruitsV2Request = root.lookupType('gamepb.illustratedpb.ClearNewUnlockedFruitsV2Request');

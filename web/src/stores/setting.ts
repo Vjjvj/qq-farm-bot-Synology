@@ -10,6 +10,7 @@ export interface AutomationConfig {
   ranch_sell?: boolean
   ranch_grass?: boolean
   ranch_grass_buy?: boolean
+  ranch_grass_threshold_percent?: number
   ranch_fill_cans?: boolean
   ranch_feed_normal?: boolean
   ranch_feed_organic?: boolean
@@ -20,6 +21,7 @@ export interface AutomationConfig {
   ranch_friend_mosquito?: boolean
   ranch_task?: boolean
   ranch_share?: boolean
+  ranch_daily_benefit?: boolean
   ranch_check_minutes?: number
   ranch_strategy?: string
   ranch_bag_fallback?: string
@@ -104,6 +106,8 @@ export interface FnosRanch {
   illustratedAutoClaim: boolean
   illustratedAutoComplete: boolean
   friendFeed: boolean
+  /** [fnos-fork] 2026-11-17 加草来源：warehouse = 农场仓库牧草（默认）；gold = 金币 */
+  friendFeedSource: 'warehouse' | 'gold'
   friendFeedPerTime: number
   friendFeedGoldKeep: number
   friendHelpProduce: boolean
@@ -112,9 +116,10 @@ export interface FnosRanch {
 const FNOS_RANCH_DEFAULT: FnosRanch = {
   altHold: true,
   altHoldFallbackMinutes: 60,
-  illustratedAutoClaim: false,
+  illustratedAutoClaim: true, // [fnos-fork] 2026-11-17 默认开
   illustratedAutoComplete: false,
   friendFeed: false,
+  friendFeedSource: 'warehouse',
   friendFeedPerTime: 10,
   friendFeedGoldKeep: 10000,
   friendHelpProduce: false,
@@ -139,6 +144,8 @@ function fnosNormalizeRanch(input: unknown): FnosRanch {
     const range = RANGES[key]
     if (range)
       out[key] = clamp(src[key] ?? d, range[0], range[1], d as number)
+    else if (key === 'friendFeedSource') // [fnos-fork] 2026-11-17 旧配置缺字段 → 仓库牧草
+      out[key] = src[key] === 'gold' ? 'gold' : 'warehouse'
     else out[key] = src[key] !== undefined ? !!src[key] : d
   }
   return out as FnosRanch
@@ -158,11 +165,11 @@ function fnosNormalizeGrassLands(input: unknown): FnosGrassLands {
 export interface FnosIllustratedAuto { autoClaimRewards: boolean, autoComplete: boolean }
 function fnosNormalizeIllustratedAuto(input: any): FnosIllustratedAuto {
   const src = input && typeof input === 'object' ? input : {}
-  return { autoClaimRewards: src.autoClaimRewards !== undefined ? !!src.autoClaimRewards : false, autoComplete: src.autoComplete !== undefined ? !!src.autoComplete : false }
+  return { autoClaimRewards: src.autoClaimRewards !== undefined ? !!src.autoClaimRewards : true /* [fnos-fork] 2026-11-17 默认开 */, autoComplete: src.autoComplete !== undefined ? !!src.autoComplete : false }
 }
 
 // [fnos-fork] 2026-11-16 自己收菜优先 / 空闲时只保留心跳（与 utils/fnos-quiet-priority.ts 相同；此处内联，store 不多依赖其他模块）
-export interface FnosQuietPriority { ownHarvestFirst: boolean, mergeWindowSec: number, idleKeepaliveOnly: boolean, idleMinMinutes: number, idleMaxMinutes: number }
+export interface FnosQuietPriority { ownHarvestFirst: boolean, mergeWindowSec: number, idleKeepaliveOnly: boolean, idleMinMinutes: number, idleMaxMinutes: number, timetableSteal: boolean, friendScanMinutes: number, ownLeadSec: number }
 function fnosQuietInt(src: any, key: string, min: number, max: number, fallback: number): number {
   const n = Number.parseInt(String(src?.[key] ?? ''), 10)
   return Number.isFinite(n) ? Math.max(min, Math.min(max, n)) : fallback
@@ -179,6 +186,9 @@ function fnosNormalizeQuietPriority(input: any): FnosQuietPriority {
     idleKeepaliveOnly: src.idleKeepaliveOnly !== undefined ? !!src.idleKeepaliveOnly : false,
     idleMinMinutes,
     idleMaxMinutes,
+    timetableSteal: src.timetableSteal !== undefined ? !!src.timetableSteal : true, // [fnos-fork] 2026-11-17 按时间表偷菜
+    friendScanMinutes: fnosQuietInt(src, 'friendScanMinutes', 1, 60, 5),
+    ownLeadSec: fnosQuietInt(src, 'ownLeadSec', 0, 10, 2),
   }
 }
 

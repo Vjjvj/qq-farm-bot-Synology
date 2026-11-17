@@ -26,6 +26,8 @@ export type AutomationSettingsFormModel = Pick<
 withDefaults(defineProps<{
   inRanch?: boolean
   panel?: 'automation' | 'strategy'
+  /** 页面级统一保存时隐藏表单自带的底部按钮。 */
+  hideSave?: boolean
   ranchAnimalOptions?: Array<{ value: number, label: string, kind: string }>
   saving: boolean
   fertilizerLandTypeOptions: Array<{ label: string, value: string }>
@@ -51,7 +53,13 @@ const ranchSwitches = [
   ['ranch_feed_organic', '有机罐头喂养'],
   ['ranch_task', '自动领取任务奖励'],
   ['ranch_share', '每日分享礼包'],
+  ['ranch_daily_benefit', '每日商城福利'],
 ] as const
+// [fnos-fork] 2026-11-17 给好友加牧草的来源
+const fnosFriendFeedSources = [
+  { value: 'warehouse', label: '仓库牧草（默认）' },
+  { value: 'gold', label: '金币（约 60/份）' },
+]
 const ranchFriendSwitches = [
   ['ranch_friend_steal', '自动偷取产物'],
   ['ranch_friend_clean', '自动清理'],
@@ -88,7 +96,14 @@ const ranchStrategies = [
               <BaseSwitch v-model="settings.automation[key]" :label="label" :disabled="key === 'ranch_grass_buy' && !settings.automation.ranch_grass" />
             </div>
             <div class="automation-setting-item">
+              <BaseInput v-model.number="settings.automation.ranch_grass_threshold_percent" class="w-full" label="牧草余量低于（%）时补满" type="number" min="1" max="100" step="1" :disabled="!settings.automation.ranch_grass" />
+            </div>
+            <div class="automation-setting-item">
               <BaseInput v-model.number="settings.automation.ranch_check_minutes" class="w-full" label="巡查间隔（分钟）" type="number" min="1" max="60" step="1" />
+              <!-- [fnos-fork] 2026-11-17 农牧严格交替后此项不再决定何时进牧场 -->
+              <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                [fnos-fork] 现在农场一轮做完就进牧场、牧场一轮做完就回农场，这一项不再决定何时进牧场（保留只为兼容旧配置）。
+              </p>
             </div>
           </div>
           <div v-if="panel === 'automation'" class="mt-4">
@@ -111,7 +126,7 @@ const ranchStrategies = [
           </div>
         </section>
 
-        <!-- [fnos-fork] 2026-11-16 牧场增强：轮换值守、小号等大号、牧场图鉴、好友牧场（随「保存自动控制」保存到 fnosRanch） -->
+        <!-- [fnos-fork] 2026-11-16 牧场增强：轮换值守、小号等大号、牧场图鉴、好友牧场（2026-11-17 起随上游移到「牧场 → 策略」页，随「保存牧场策略」保存到 fnosRanch） -->
         <section v-if="panel === 'automation' && settings.fnosRanch" class="farm-card rounded-2xl p-4" data-testid="fnos-ranch">
           <div class="mb-4 flex items-start gap-3">
             <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-sky-50 text-sky-600 dark:bg-sky-900/25 dark:text-sky-400">
@@ -134,7 +149,8 @@ const ranchStrategies = [
               <BaseInput v-model.number="settings.fnosRanch.altHoldFallbackMinutes" class="w-full" label="农场超时为 0 时牧场最长等（分钟）" type="number" min="5" max="720" step="5" :disabled="!settings.fnosRanch.altHold" />
             </div>
             <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.fnosRanch.illustratedAutoClaim" label="牧场图鉴奖励自动领取" />
+              <!-- [fnos-fork] 2026-11-17 普通图鉴 + 巨大图鉴（重量分等级奖励），默认开，约 30 分钟检查一次，有红点时提前 -->
+              <BaseSwitch v-model="settings.fnosRanch.illustratedAutoClaim" label="牧场图鉴 / 巨大图鉴奖励自动领取" title="普通图鉴等级奖励和巨大图鉴重量分奖励；约 30 分钟随牧场巡查检查一次，收到图鉴红点时提前，「空闲时只保留心跳」期间暂停" />
             </div>
             <div class="automation-setting-item">
               <BaseSwitch v-model="settings.fnosRanch.illustratedAutoComplete" label="自动完成牧场图鉴（买幼崽优先缺的）" />
@@ -143,18 +159,22 @@ const ranchStrategies = [
               <BaseSwitch v-model="settings.fnosRanch.friendHelpProduce" label="好友牧场：帮忙生产" />
             </div>
             <div class="automation-setting-item">
-              <BaseSwitch v-model="settings.fnosRanch.friendFeed" label="给好友加牧草（花金币，约 60 金币/份）" />
+              <BaseSwitch v-model="settings.fnosRanch.friendFeed" label="给好友加牧草" />
+            </div>
+            <!-- [fnos-fork] 2026-11-17 加草来源：默认用农场仓库牧草（7001），可改金币 -->
+            <div class="automation-setting-item">
+              <BaseSelect v-model="settings.fnosRanch.friendFeedSource" label="加草来源" :options="fnosFriendFeedSources" :disabled="!settings.fnosRanch.friendFeed" />
             </div>
             <div class="automation-setting-item">
               <BaseInput v-model.number="settings.fnosRanch.friendFeedPerTime" class="w-full" label="每个好友每次最多加（份）" type="number" min="1" max="500" step="1" :disabled="!settings.fnosRanch.friendFeed" />
             </div>
             <div class="automation-setting-item">
-              <BaseInput v-model.number="settings.fnosRanch.friendFeedGoldKeep" class="w-full" label="自己金币低于此值不加" type="number" min="0" max="999999999" step="1000" :disabled="!settings.fnosRanch.friendFeed" />
+              <BaseInput v-model.number="settings.fnosRanch.friendFeedGoldKeep" class="w-full" label="自己金币低于此值不加（金币来源）" type="number" min="0" max="999999999" step="1000" :disabled="!settings.fnosRanch.friendFeed || settings.fnosRanch.friendFeedSource !== 'gold'" />
             </div>
           </div>
           <p class="mt-3 text-xs text-gray-500 leading-relaxed dark:text-gray-400">
             小号等大号沿用「大小号协作」的大号和超时设置，作用于上面的「自动收获」：有货架在等大号偷时只收成熟动物，不收货架。
-            帮忙生产、给好友加牧草挂在上面「好友互动」的好友巡查里（每轮最多 3 位好友，按到期时间给农场让路）；给好友加牧草扣金币（约 60 金币/份），自己金币低于保留值就不加，且不超过好友牧草机剩余容量。
+            帮忙生产、给好友加牧草挂在上面「好友互动」的好友巡查里（每轮最多 3 位好友，按到期时间给农场让路）；给好友加牧草默认用农场仓库的牧草（每份 1 个牧草，仓库不够时只加够库存的份数并暂停、写日志，不会改用金币）；选「金币」则扣金币（约 60 金币/份），自己金币低于保留值就不加。都不超过每次上限和好友牧草机剩余容量。
             好友互动的大小号规则与农场一致：小号开了「不偷大号的菜」时不偷大号；开了「只给大号放捣乱」时只给大号放蚊子、不帮大号清理；其余情况不给自己的大号、小号放蚊子。日志标签「牧场」。
           </p>
         </section>
@@ -495,6 +515,20 @@ const ranchStrategies = [
             自己收菜优先：按自家作物的成熟时间准点巡田；成熟前后十几秒内好友巡查先暂停让路；收完后下一块几秒内（上面的秒数）也要成熟时，先不补种，等那块成熟一起收、一起种（最多连续合并 3 次）。
             大小号协作里开启「成熟作物先留给大号偷」的小号不受影响：仍然等大号偷过（或超时）才收，不抢点、不合并。
           </p>
+          <!-- [fnos-fork] 2026-11-17 按时间表偷菜 / 好友扫描间隔 / 自家提前秒数 -->
+          <div class="grid grid-cols-1 mt-3 gap-2 sm:grid-cols-2" data-testid="fnos-timetable">
+            <div class="automation-setting-item">
+              <BaseSwitch v-model="settings.fnosQuietPriority.timetableSteal" class="automation-setting-item" label="按时间表偷菜" />
+            </div>
+            <!-- [fnos-fork] 2026-11-17 用户要求「扫描频率做成可填写的，默认 5 分钟」：直接填分钟数（1～60） -->
+            <BaseInput v-model.number="settings.fnosQuietPriority.friendScanMinutes" label="好友列表扫描间隔 (分钟，默认 5)" type="number" min="1" max="60" step="1" placeholder="5" data-testid="fnos-friend-scan-minutes" />
+            <BaseInput v-model.number="settings.fnosQuietPriority.ownLeadSec" label="自家到期前提前 (秒)" type="number" min="0" max="10" />
+          </div>
+          <p class="mt-2 text-xs text-gray-500 leading-relaxed dark:text-gray-400">
+            按时间表偷菜：每隔上面填的分钟数（默认 5）扫一次好友列表（关掉「按时间表偷菜」时好友巡查仍按原来的间隔），记下每位好友下次成熟 / 需要帮忙 / 牧场可偷的时间（进过的好友才知道成熟时间：每次自家巡田 / 自家牧场一轮做完，立刻把还不知道时间的好友农场、牧场轮一遍，已知时间的跳过，空地 / 暂无可偷的农场 15 分钟、牧场 10 分钟后再看；翻阅每位间隔 0.5～1 秒，每 300 位休息 15～25 秒），到点直接去，不等整轮；去的时候顺手帮忙。多位同时到点排队，偷菜、帮忙、捣乱的开关和次数上限、大小号规则都照旧。
+            自家作物、动物到期前上面的秒数先进去等着，到点立即收。优先级：自己收获 &gt; 偷好友 &gt; 帮忙 &gt; 任务 / 礼包 / 图鉴 / 神秘商店 / 每日福利 / 偷收比统计 / 宠物同步等杂项（30 秒内有前面的事要做或好友巡查在跑时杂项先不做）。
+            农场、牧场轮流：一边一轮做完且在这边已待满 1 分钟才切到另一边；切之前这边 30 秒内有自己的收获就先等收完（最多多等 2 分钟）。自家收获、好友时间表到点随时插队。好友页 / 牧场好友列表会显示「还多久可偷」。
+          </p>
           <div v-if="settings.fnosQuietPriority.idleKeepaliveOnly" class="grid grid-cols-2 mt-3 gap-3">
             <BaseInput v-model.number="settings.fnosQuietPriority.idleMinMinutes" label="每次静默最短 (分钟)" type="number" min="1" max="180" />
             <BaseInput v-model.number="settings.fnosQuietPriority.idleMaxMinutes" label="每次静默最长 (分钟)" type="number" min="1" max="180" />
@@ -516,7 +550,8 @@ const ranchStrategies = [
                 图鉴
               </h4>
               <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                账号运行时约每 10 分钟检查一次作物图鉴和变异图鉴，保存后约 12 秒先执行一次
+                <!-- [fnos-fork] 2026-11-17 -->
+                账号运行时约每 30 分钟检查一次作物图鉴和变异图鉴的可领奖励（收到图鉴红点时提前；自动完成图鉴约每 10 分钟），保存后约 12 秒先执行一次；牧场图鉴 / 巨大图鉴在牧场空间「飞牛增强」里
               </p>
             </div>
           </div>
@@ -536,7 +571,7 @@ const ranchStrategies = [
       </div>
     </div>
 
-    <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+    <div v-if="!hideSave" class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
       <BaseButton variant="primary" size="sm" :loading="saving" @click="emit('save')">
         保存自动控制
       </BaseButton>
