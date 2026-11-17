@@ -12,7 +12,7 @@ on:
   workflow_dispatch:
     inputs:
       spk_version:
-        description: 'SPK 版本号，留空则用「上海日期-<run number>」，例 2026.11.03-1'
+        description: 'SPK 版本号，留空则自动取「上海日期-当天第几个包」，例 2026.11.18-1'
         required: false
         type: string
       publish_release:
@@ -47,6 +47,9 @@ jobs:
       npm_config_store_dir: ${{ github.workspace }}/.pnpm-store
     steps:
       - uses: actions/checkout@v4
+        with:
+          # 版本号要按已发布的 spk-* tag 自动选号，浅克隆只有当前这一个 ref
+          fetch-depth: 0
 
       - name: 定版本号
         id: meta
@@ -54,15 +57,17 @@ jobs:
           DISPATCH_VERSION: ${{ inputs.spk_version }}
         run: |
           set -euo pipefail
-          if [ "${GITHUB_EVENT_NAME}" = "push" ]; then
+          if [ -n "${DISPATCH_VERSION}" ]; then
+            ver="${DISPATCH_VERSION}"
+          elif [ "${GITHUB_EVENT_NAME}" = "push" ]; then
             ver="${GITHUB_REF_NAME#spk-}"
           else
-            ver="${DISPATCH_VERSION}"
-            [ -n "${ver}" ] || ver="$(TZ=Asia/Shanghai date '+%Y.%m.%d')-${GITHUB_RUN_NUMBER}"
+            # 留空则按「上海日期-当天第几个包」自动选号，规则与本地出包同一份实现
+            ver="$(VERSION_ONLY=1 bash synology/build.sh)"
           fi
-          # DSM 把版本号当「主版本-feature build」两段比较，格式不合装机时会被拒
-          echo "${ver}" | grep -Eq '^[0-9]{4}\.[0-9]{1,2}\.[0-9]{1,2}-[0-9]+$' || {
-            echo "版本号 ${ver} 不符合 YYYY.MM.DD-N" >&2; exit 1; }
+          # DSM 的 version 是「主版本-feature build」两段：日期放主版本，当天序号放 build
+          echo "${ver}" | grep -Eq '^[0-9]{4}\.[0-9]{2}\.[0-9]{2}-[1-9][0-9]*$' || {
+            echo "版本号 ${ver} 不符合 YYYY.MM.DD-N（N 为当天第几个包，从 1 开始）" >&2; exit 1; }
           echo "version=${ver}" >>"$GITHUB_OUTPUT"
           echo "SPK_VERSION=${ver}" >>"$GITHUB_ENV"
 
@@ -98,7 +103,17 @@ jobs:
         env:
           MAINTAINER: Vjjvj
           NODE_CACHE_DIR: ${{ github.workspace }}/.spk-cache
-        run: bash synology/build.sh
+          DISPATCH_VERSION: ${{ inputs.spk_version }}
+        run: |
+          set -euo pipefail
+          # 自动选号的路径（手动触发且留空）让 build.sh 自己再做一次新旧检查；
+          # 版本号由 tag 或手填固定的，格式已在「定版本号」校验过，这里不再二次判新旧
+          # ——否则重跑旧 tag（如补发 -9）会被已发布的 -10 拦下。
+          if [ "${GITHUB_EVENT_NAME}" != "push" ] && [ -z "${DISPATCH_VERSION}" ]; then
+            bash synology/build.sh
+          else
+            ALLOW_NOT_NEWER=1 bash synology/build.sh
+          fi
 
       - name: 装机前自检（移植指南 §11.5）
         run: |

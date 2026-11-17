@@ -56,12 +56,15 @@ LOG_LEVEL="info"         # error / warn / info / debug
 
 ```sh
 pnpm install
-synology/build.sh                              # x86_64，版本号取当天日期 -1
+synology/build.sh                              # x86_64，版本号取「当天日期-当天第几个包」
 SPK_ARCH=armv8 synology/build.sh               # armv8
-SPK_VERSION=2026.11.2-3 synology/build.sh      # 指定版本号
+SPK_VERSION=2026.11.17-3 synology/build.sh     # 指定版本号（不低于已发布版本）
+VERSION_ONLY=1 synology/build.sh               # 只看自动选出的版本号，不构建
 ```
 
-产物在 `synology/out/qq-farm-bot_<版本>_<架构>.spk`（+ `.sha256`）。可覆盖的环境变量：`SPK_ARCH`、`SPK_VERSION`、`NODE_VERSION`、`NODE_CACHE_DIR`（复用已下载的 Node dist，跳过外网拉取）、`SKIP_INSTALL=1`（依赖已装好时跳过 `pnpm install`）、`MAINTAINER`（写进 `INFO` 的发布商名，仓库没有 git 配置时会是 `unknown`）。
+版本号形如 `2026.11.17-1`：日期 + **当天第几个包**，每天从 `1` 重新算，第二天出包就是 `2026.11.18-1`。脚本按已发布的 `spk-*` tag 自动选号，跨天归零不会让 DSM 误判成降级。
+
+产物在 `synology/out/qq-farm-bot_<版本>_<架构>.spk`（+ `.sha256`）。可覆盖的环境变量：`SPK_ARCH`、`SPK_VERSION`、`ALLOW_NOT_NEWER`、`VERSION_ONLY`、`RELEASE_REMOTE`、`NODE_VERSION`、`NODE_CACHE_DIR`（复用已下载的 Node dist，跳过外网拉取）、`SKIP_INSTALL=1`（依赖已装好时跳过 `pnpm install`）、`MAINTAINER`（写进 `INFO` 的发布商名，仓库没有 git 配置时会是 `unknown`）。
 
 构建脚本里两个不显然的约束：不得把 `QQ_FARM_NO_TCP=1` 编进产物（脚本会 grep 拦住，否则群晖版永远拒绝监听 TCP）；后端依赖必须全是纯 JS，出现 `.node` 原生模块就得随包提供对应架构的预编译文件（同样会拦）。
 

@@ -130,9 +130,9 @@ git diff --name-only --diff-filter=U    # 只要文件名
 
 其余几项：
 
-- **版本号与上游脱钩**：`synology/build.sh` 里 `APP_VERSION="${SPK_VERSION:-$(TZ=Asia/Shanghai date '+%Y.%m.%d')-1}"`，跟上游 manifest 的 `version` 没关系。spk 版本必须是 `YYYY.MM.DD-N`（月日补零，同日再发递增 `-N`）——DSM 把它当「主版本-feature build」两段比较，`2026.11.4` 这种没后缀的会和飞牛包混在一起。
+- **版本号与上游脱钩**：`synology/build.sh` 自己按「构建日期 + 当天第几个包」选号，跟上游 manifest 的 `version` 没关系。spk 版本必须是 `YYYY.MM.DD-N`（月日补零，`N` 为当天序号、每天从 `1` 重新算）——DSM 把它当「主版本-feature build」两段比较，`2026.11.4` 这种没后缀的会和飞牛包混在一起。
 - **上游带新依赖**（`pnpm-lock.yaml` 变了）：本机先 `pnpm install --frozen-lockfile`；CI 的依赖缓存 key 走 `hashFiles('pnpm-lock.yaml')`，会自动换新，不用手动清。
-- **出包只能在 Linux**：Windows 上只能做到构建那步，`synology/build.sh` 有系统闸。走 CI（`.github/workflows/build-spk.yml`，手动触发时 `spk_version` 留空则按「上海日期-run number」，`publish_release` 决定是否连带发 Release）或在 NAS / Linux 机上跑脚本。
+- **出包只能在 Linux**：Windows 上只能做到构建那步，`synology/build.sh` 有系统闸。走 CI（`.github/workflows/build-spk.yml`，手动触发时 `spk_version` 留空则按「上海日期-当天第几个包」自动选号，`publish_release` 决定是否连带发 Release）或在 NAS / Linux 机上跑脚本。
 - **armv8 仍是未实机验证**：上游改动不会因为 CI 变绿就变成「armv8 已支持」。
 - **提交和推送是两次授权**：合并完先报状态，别自己 `git push`。
 
