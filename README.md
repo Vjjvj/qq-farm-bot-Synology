@@ -10,7 +10,7 @@ QQ 农场助手的 **群晖 Synology DSM 原生套件（`.spk`）** 版本。
 > [!NOTE]
 > **致谢与下架承诺**：本仓库能跑起来，靠的是上游两代作者和贡献者的付出——群晖适配只是把同一套东西换个打包形态，不对上游代码主张任何权利，也不作商业用途。若原作者认为构成侵权，或希望它不再存在，请到 [仓库 Issues](https://github.com/Vjjvj/qq-farm-bot-Synology/issues) 留言说明，看到即删除整个仓库，不做争辩、不改名保留。详见文末「许可、致谢与下架」。
 
-本项目 fork 自 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos)（飞牛 fnOS 原生版），它又 fork 自 qq-farm-bot 原始项目。QQ 农场助手的核心功能、下面「额外功能」里列的所有特性都来自这两层上游，感谢原作者及贡献者；本仓库只在此之上做群晖打包与适配。
+本项目 fork 自 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos)（飞牛 fnOS 原生版），它又 fork 自 [liyangpengs/qq-farm-bot](https://github.com/liyangpengs/qq-farm-bot) 原始项目。QQ 农场助手的核心功能、下面「额外功能」里列的所有特性都来自这两层上游，感谢原作者及贡献者；本仓库只在此之上做群晖打包与适配。
 
 **这个 fork 只出群晖包，不再产出飞牛 FPK。** 与上游共用且被本仓库改过的文件目前只有一个：`web/src/components/Sidebar.vue`（兜底文案「飞牛用户/飞牛管理员/已通过飞牛登录」改为群晖字样，版本前缀 `fpk` → `spk`）。要出飞牛包请回上游，别用这个分支——那样侧栏会显示群晖字样。
 
@@ -167,6 +167,6 @@ VERSION_ONLY=1 synology/build.sh               # 只看自动选出的版本号�
 
 **许可**：许可沿用上游项目的声明（上游 `package.json` 中声明为 ISC）。本项目同样仅供学习与研究使用，使用者需自行承担因使用本工具产生的后果。
 
-**致谢**：感谢 qq-farm-bot 原始项目的作者与贡献者，以及 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos) 的作者与贡献者。协议逆向、活动逻辑、TSDK 运行时这些真正难做的部分都是他们的工作；本仓库新增的只有 `synology/` 打包链、DSM 生命周期钩子、一处前端文案和文档。没有上游，这里什么都跑不起来。
+**致谢**：感谢 [liyangpengs/qq-farm-bot](https://github.com/liyangpengs/qq-farm-bot) 原始项目的作者与贡献者，以及 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos) 的作者与贡献者。协议逆向、活动逻辑、TSDK 运行时这些真正难做的部分都是他们的工作；本仓库新增的只有 `synology/` 打包链、DSM 生命周期钩子、一处前端文案和文档。没有上游，这里什么都跑不起来。
 
 **下架承诺**：本项目不作商业用途、不提供任何托管服务，也不主张对上游代码的权利。如果上游作者认为本仓库构成侵权，或出于任何原因希望它消失，请在 [仓库 Issues](https://github.com/Vjjvj/qq-farm-bot-Synology/issues) 留言说明来意，我会直接删除整个仓库——不转移、不改名保留、不争论。
