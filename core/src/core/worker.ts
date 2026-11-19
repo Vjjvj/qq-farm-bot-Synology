@@ -17,6 +17,7 @@ const { performDailyMonthCardGift, getMonthCardDailyState } = require('../servic
 const { performDailyVipGift, getVipDailyState } = require('../services/qqvip');
 const { runExclusiveAutomationTask, isAutomationTaskRunning } = require('../services/automation-lock');
 const ranchAutomation = require('../services/ranch/automation');
+const { isRanchMarketEnabled } = require('../config/ranch-automation');
 const { createScheduler, getSchedulerRegistrySnapshot } = require('../services/scheduler');
 const { checkDailyShareStatus, getShareDailyState } = require('../services/share');
 const { refreshActivityWindows } = require('../services/activity-windows');
@@ -129,7 +130,6 @@ let runtimeGeneration: number = 0;
 let lastDailyRunDate: string = '';
 let ranchRoutineQueued = false;
 // [fnos-fork] 上游 #148 的 initialFarmCheckDone / initialFriendCheckDone / ranchDeferredUntil（牧场等首轮农场、好友巡查和低优先级闸门）不引入：何时进牧场由农牧轮流 fnos-turns 决定
-let onRanchMarketStockReady: (() => void) | null = null;
 
 function ranchNextRunAt(): number {
     if (ranchRoutineQueued) return Infinity;
@@ -235,9 +235,14 @@ function fnosLogInsert(key: string, msg: string, space: 'farm' | 'ranch'): void 
 
 // 上游 #147：便便到账唤醒牧场有机化肥兑换（[fnos-fork] 何时进牧场仍由农牧轮流决定）
 function wakeRanchMarketExchange(): void {
-    if (!loginReady || !getAutomation().ranch_market_organic) return;
-    ranchAutomation.resetMarketSchedule();
+    if (!loginReady || !isRanchMarketEnabled(getAutomation())) return;
+    ranchAutomation.requestMarketCheck();
     scheduleUnifiedNextTick();
+}
+
+function onRanchMarketVisitChanged(rotation: any): void {
+    if (!loginReady || !isRanchMarketEnabled(getAutomation())) return;
+    if (ranchAutomation.noteMarketVisit(rotation)) scheduleUnifiedNextTick();
 }
 
 function runRanchRoutine(detached = false): Promise<void> {
@@ -840,7 +845,9 @@ function applyRuntimeConfig(snapshot: any, syncNow: boolean = false): number {
     const appliedSnapshot = applyConfigSnapshot(snapshot || {}, { persist: false, accountId });
     configureEmailClaim({ hour: appliedSnapshot.emailClaimHour, accountId });
     const nextRanchAuto = getAutomation();
-    if (Object.keys(nextRanchAuto).some(key => key.startsWith('ranch_') && nextRanchAuto[key] !== prevAuto[key])) ranchAutomation.resetSchedule();
+    const ranchChanged = Object.keys(nextRanchAuto).some(key => key.startsWith('ranch_')
+        && JSON.stringify(nextRanchAuto[key]) !== JSON.stringify(prevAuto[key]));
+    if (ranchChanged) ranchAutomation.resetSchedule();
     if (rev > appliedConfigRevision) appliedConfigRevision = rev;
     // [fnos-fork] 大号/小号、图鉴、偷收比：设置有变化时在日志里打印当前状态
     try { require('../services/fnos-fork-config').onWorkerConfigApplied(); } catch { /* ignore */ }
@@ -983,6 +990,7 @@ async function startBot(config: any): Promise<void> {
         if (!canContinueLogin() || loginReady) return;
         loginReady = true;
         try { require('../services/friend/fnos-steal-ratio').noteFnosOnlineSession(); } catch { /* [fnos-fork] 在线期间偷菜：记下本次登录/重连成功时刻，掉线期间的记录不算 */ }
+        ranchAutomation.resetSchedule();
         if (onSellGain) {
             networkEvents.off('sell', onSellGain);
         }
@@ -1010,9 +1018,10 @@ async function startBot(config: any): Promise<void> {
         };
         networkEvents.on('farmHarvested', onFarmHarvested);
 
-        if (onRanchMarketStockReady) networkEvents.off('ranchMarketStockReady', onRanchMarketStockReady);
-        onRanchMarketStockReady = wakeRanchMarketExchange;
-        networkEvents.on('ranchMarketStockReady', onRanchMarketStockReady);
+        networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
+        networkEvents.on('ranchMarketStockReady', wakeRanchMarketExchange);
+        networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
+        networkEvents.on('ranchMarketVisitChanged', onRanchMarketVisitChanged);
 
         if (onDogSkillGiftPending) {
             networkEvents.off('dogSkillGiftPending', onDogSkillGiftPending);
@@ -1096,10 +1105,8 @@ function detachRuntimeListeners(): void {
         networkEvents.off('farmHarvested', onFarmHarvested);
         onFarmHarvested = null;
     }
-    if (onRanchMarketStockReady) {
-        networkEvents.off('ranchMarketStockReady', onRanchMarketStockReady);
-        onRanchMarketStockReady = null;
-    }
+    networkEvents.off('ranchMarketStockReady', wakeRanchMarketExchange);
+    networkEvents.off('ranchMarketVisitChanged', onRanchMarketVisitChanged);
     if (onDogSkillGiftPending) {
         networkEvents.off('dogSkillGiftPending', onDogSkillGiftPending);
         onDogSkillGiftPending = null;
@@ -1212,6 +1219,9 @@ async function handleApiCall(msg: any): Promise<void> {
                     break;
                 case 'claimIllustratedRewards':
                     result = await require('../services/illustrated').claimIllustratedRewards(args[0]);
+                    break;
+                case 'clearIllustratedNew':
+                    result = await require('../services/illustrated').clearIllustratedNew(args[0]);
                     break;
                 case 'getSolarCalendar':
                     result = await require('../services/solar-calendar').getSolarCalendar();
