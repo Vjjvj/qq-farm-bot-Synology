@@ -356,6 +356,7 @@ function startDailyRoutineTimer(runImmediately: boolean = true): void {
             return;
         }
         lastDailyRunDate = today;
+        try { require('../services/friend/scheduler').checkDailyReset(); } catch { /* ignore */ } // [fnos-fork] 北京时间 0 点清空农场帮忙/捣乱次数缓存，下次从服务端重读当日余额
         runExclusiveAutomationTask('daily_routines', () => runDailyRoutines(true)).catch(() => null);
     });
 }
@@ -1208,7 +1209,8 @@ async function handleApiCall(msg: any): Promise<void> {
                 if (!loginReady || shutdownStarted) throw new Error('账号未连接');
                 switch (method) {
                 case 'getRanchState':
-                    result = await require('../services/ranch').getRanchState(args[0], args[1], args[2]);
+                    // 打包版的 fork 使用 JSON IPC，会把缺省的好友 GID 编码成 null。
+                    result = await require('../services/ranch').getRanchState(args[0], args[1], args[2] ?? undefined);
                     break;
                 case 'clearRanchIllustratedNew':
                     result = await require('../services/ranch/book').clearGiantBookNew();
