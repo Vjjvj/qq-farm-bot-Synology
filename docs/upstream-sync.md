@@ -74,6 +74,24 @@ git diff --name-only "$base" upstream/master   # 上游改过的文件
 - 上游的这些分支**可能中途自我推翻**。11-23 里 `5a0b653` 先让偷菜被拒不写日志，四个提交后 `659dfeb` 又还原了它。所以读变更说明要读到最新那条为准，别把中间态当成最终行为。
 - 分支合并还可能在 master 上留下**先删后加**的痕迹（这次 `RanchOverview.vue` 被删）。合完顺手 `Test-Path` 一下说明里提到的被删文件，确认状态和说明一致。
 
+**上游新增 workspace 包时，群晖打包链必须跟着补构建步骤——这是唯一一类合并零冲突却会直接出不了包的改动**。2026-11-24（上游 #181）新增了 `packages/session-contract`，core 的 `runtime-paths.ts` 和 `worker-manager.ts` 直接 `require('@qq-farm-bot/session-contract')`，解析的是它的 `dist/`。飞牛的 `fnos/build.sh` 已经加了 `pnpm build:contract`，但群晖的 `synology/build.sh` 是独立维护的，**不会自动跟上**。
+
+漏掉这一步的后果不是警告而是硬失败，实测报错：
+
+```
+src/session/host.ts(6,104): error TS2307: Cannot find module '@qq-farm-bot/session-contract' or its corresponding type declarations.
+src/session/ipc.ts(3,64): error TS2307: Cannot find module '@qq-farm-bot/session-contract' or its corresponding type declarations.
+```
+
+判断方法是每批合并后对比两边构建脚本的 pnpm 命令序列：
+
+```sh
+Select-String -Path fnos/build.sh -Pattern '^\s*pnpm' | Select-Object -ExpandProperty Line
+Select-String -Path synology/build.sh -Pattern 'pnpm '    | Select-Object -ExpandProperty Line
+```
+
+飞牛那边多出来的任何一步（`build:contract` 这类），都要判断群晖是否同样需要。这次需要的，已补在 `synology/build.sh` 的 `build:ts` 之前。补完最好实测一遍：删掉 `packages/session-contract/dist` 跑 `pnpm -C core build:ts` 应当失败，再跑 `pnpm build:contract` 后应当成功，`esbuild` 也应能把它打进单文件（实测 worker 产物约 4.6 MB）。
+
 **交集为空也别直接合完就走：先读一遍上游的变更说明，看它有没有「我自己刻意没引入上游某段」的决定**。2026-11-18 那次就是例子：上游 `2026.11.17.3` 的说明里明确写了 #148 的 `initialFarmCheckDone` / `initialFriendCheckDone` / `ranchDeferredUntil`（牧场按低优先级闸门推迟）**与飞牛 fork 的农牧轮流调度冲突，它自己没引入**。这种「上游主动剔除」的部分，如果我们机械地全盘 merge，就会把上游扔掉的逻辑重新带回来，而且**测试不会拦**（那套逻辑原本就没有测试覆盖群晖侧的分支）。
 
 这次的具体核对方法：合完立刻 grep 那几个标志名，确认它们**只出现在 `[fnos-fork]` 的注释里**、没有被真正接进调度：
@@ -90,7 +108,7 @@ Select-String -Path core/src/core/worker.ts -Pattern 'initialFarmCheckDone|initi
 git merge upstream/master
 ```
 
-**验证，四条都要过**。2026-11-23 那次合并（上游 `49660b2`，两个飞牛版本、两个 PR 加三个 fork 分支一批进来）的实测：core 463 通过、web 78 通过、`vue-tsc` 无输出、`web build` 成功。**用例数会随上游增删测试双向变化**：11-15 那次上游下架奶茶 fork 功能，一次删掉 6 个 core 测试文件与 2 个 web 测试文件，core 从 414 掉到 359、web 从 52 掉到 47；11-16 上游加牧场，core 回到 387、web 回到 52；11-17 白天加好友等级与最近访客，core 到 399、web 到 55；11-17 晚上游叠了五条调度/日志分支加三个 PR，core 到 449、web 到 71；11-18 上游只合两个 PR（#147/#148）且没加测试文件，仍是 449/71；11-19 上游 #153 带进 `farm-ripening.test.js`（催熟策略），core 到 453，web 仍 71；11-20 上游四个 PR 只动了 `fnos-timetable.test.js` 的几行断言、没加测试文件，仍是 453/71；11-22「今日农场」带进 4 项 core 测试、日志空间扩到 2 项 web 测试，core 到 457、web 到 73；11-23 带进 `fnos-muge-auto-claim.test.js`、`fnos-overview-cache.test.js` 与 `fnos-overview.test.mjs`，core 到 463、web 到 78。看到数字变化先确认是不是上游增删的，别当成测试挂了或自己改错了。上游自己的变更说明里通常写了它的用例数（`2026.11.23.1` 记的是 463/78），**合完对一下这两个数**，一致就说明本地没有漏合并的测试改动。
+**验证，四条都要过**。2026-11-24 那次合并（上游 `97014ee`，两个飞牛版本、一个 PR 加五个 fork 分支一批进来）的实测：core 472 通过、web 78 通过、`vue-tsc` 无输出、`web build` 成功。**用例数会随上游增删测试双向变化**：11-15 那次上游下架奶茶 fork 功能，一次删掉 6 个 core 测试文件与 2 个 web 测试文件，core 从 414 掉到 359、web 从 52 掉到 47；11-16 上游加牧场，core 回到 387、web 回到 52；11-17 白天加好友等级与最近访客，core 到 399、web 到 55；11-17 晚上游叠了五条调度/日志分支加三个 PR，core 到 449、web 到 71；11-18 上游只合两个 PR（#147/#148）且没加测试文件，仍是 449/71；11-19 上游 #153 带进 `farm-ripening.test.js`（催熟策略），core 到 453，web 仍 71；11-20 上游四个 PR 只动了 `fnos-timetable.test.js` 的几行断言、没加测试文件，仍是 453/71；11-22「今日农场」带进 4 项 core 测试、日志空间扩到 2 项 web 测试，core 到 457、web 到 73；11-23 带进 `fnos-muge-auto-claim.test.js`、`fnos-overview-cache.test.js` 与 `fnos-overview.test.mjs`，core 到 463、web 到 78；11-24 带进 `fnos-overview-writer.test.js`，core 到 472，web 仍 78。看到数字变化先确认是不是上游增删的，别当成测试挂了或自己改错了。上游自己的变更说明里通常写了它的用例数（`2026.11.24` 记的是 472/78），**合完对一下这两个数**，一致就说明本地没有漏合并的测试改动。
 
 **还要单独核一遍「默认值」**。上游改默认值时，测试全绿也不代表升级行为没变——2026-11-17 晚那次上游 #145 把 `RANCH_AUTOMATION_DEFAULTS` 里十几个 `false` 全改成 `true`，测试一条都不会响，但用户升级后牧场会开始自己干活。做法是每批合并后 `git diff <合并前基线> HEAD -- '**/DEFAULT*' '**/*defaults*' '**/config/*.ts'` 扫一遍，再判断影响面：
 
@@ -143,16 +161,18 @@ git diff --name-only --diff-filter=U    # 只要文件名
 
 ## 6. 合并之后
 
-**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-23 那次（合并提交 `70c5eff`）的填法：
+**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-24 那次（合并提交 `a9055df`）的填法：
 
 | 要素 | 填什么 |
 | --- | --- |
-| 上游到哪个提交 | `49660b2` |
-| 对应的飞牛版本号 | `2026.11.23.1`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
-| 本仓库的合并提交号 | `70c5eff` |
-| 带进来哪些用户可见变化 | **运行日志取消「偷菜日志 / 报错日志」分栏（删功能）**；普通与有机罐头分别设置使用时机（四档 `any` / `longest` / `to_production` / `near_harvest`，新增 `ranch_feed_organic_stage` 默认 `near_harvest`）；好友牧场可同时展开多位好友、赠送牧草、详情分区重排；首页合并农场 / 牧场概览（原 `RanchOverview.vue` 删除）；牧歌初启成长手册奖励自动领取 `mugeAutoClaim`（默认开）；播种失败日志带作物名与种子 ID |
-| `core` / `web` 的 `package.json` 是否变 | **都没变**（根 `20261116`、`core` `20261117`、`web` `20261119`），`pnpm-lock.yaml` 也没变——这条要实读再写，别按「上游发版就会 bump」推 |
-| 验证到哪一步 | 四条命令通过（core 463、web 78、`vue-tsc` 无输出、`web build` 成功），与上游 `2026.11.23.1` 自述的用例数一致；**没有用真号验证过**，上游自己也只做到模拟网关冒烟，且它明说好友牧场新版面没在浏览器里看过 |
+| 上游到哪个提交 | `97014ee` |
+| 对应的飞牛版本号 | `2026.11.24`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
+| 本仓库的合并提交号 | `a9055df` |
+| 带进来哪些用户可见变化 | **偷收比全套下架（删功能）**：阈值 / 拒绝申请 / 好友页筛选 / Bark / 自动删好友全部移除，只留「在线期间来偷菜的自动删除」；独立会话宿主与后端接管（`packages/session-contract`，群晖不设 `FARM_SESSION_SOCKET` 故不启用）；牧场好友列表显示可帮生产 / 可偷 / 可清理；首页概览紧凑化 + 农场生涯；概览缓存改由后台写入（`data/fnos-overview-cache/`，15 秒节流） |
+| `core` / `web` 的 `package.json` 是否变 | 版本号**都没变**（根 `20261116`、`core` `20261117`、`web` `20261119`），但根 `package.json` 加了 `build:contract` 脚本、`pnpm-workspace.yaml` 加了 `packages/session-contract`、`pnpm-lock.yaml` 变了——**这条不能再简单回答「变没变」，要分「版本号」和「脚本/工作区」两问** |
+| 验证到哪一步 | 四条命令通过（core 472、web 78、`vue-tsc` 无输出、`web build` 成功），与上游 `2026.11.24` 自述的用例数一致；**没有用真号验证过**，上游也没装 NAS 实测 |
+
+这次暴露了一个新要素，以后要单独核：**上游新增 workspace 包 / 新构建前置时，群晖打包链要跟着补**（详见第 2 节末）。六要素表格里「package.json 是否变」这一栏，从此要拆成两问回答——版本号变没变是一回事，脚本和工作区配置变没变是另一回事，后者才决定群晖能不能出包。
 
 这次还多了一类要写进正文的东西：**上游拆开或新增了默认开启的开关**。#162 把 `ranch_market_organic` 拆成两个独立开关（默认都开），#160 新增 `ranch_illustrated`（默认开），11-20 新增 `ranch_activate_shed`（默认开），11-20.2 新增 `ranch_feed_normal_stage`（默认 `longest`，是枚举不是布尔），11-23 又新增 `ranch_feed_organic_stage`（默认 `near_harvest`）与 `mugeAutoClaim`（默认开）。和单纯改常量不同，这类改动要看有没有迁移代码：`migrateRanchMarketAutomation` 只给缺失的键填值、已明确设置的独立开关优先，所以老用户不会因为升级突然开始兑松果；但 `ranch_illustrated` 是纯新增字段，老配置里没有这个键，`cloneAccountConfig` 会套上默认值，**等于升级即生效**；`ranch_activate_shed` 介于两者之间——它带一段条件豁免（旧账号同时关了 `ranch_upgrade` 与 `ranch_buy` 时保留手动解锁），写在 `shared-state.ts` 的 `cloneAccountConfig` 附近。判断方法是合完直接看默认值文件里新键有没有配套的归一化 / 迁移函数：
 
@@ -178,7 +198,7 @@ git diff <合并前基线> HEAD -- '**/*defaults*' core/src/config core/src/type
 其余几项：
 
 - **版本号与上游脱钩**：`synology/build.sh` 自己按「构建日期 + 当天第几个包」选号，跟上游 manifest 的 `version` 没关系。spk 版本必须是 `YYYY.MM.DD-N`（月日补零，`N` 为当天序号、每天从 `1` 重新算）——DSM 把它当「主版本-feature build」两段比较，`2026.11.4` 这种没后缀的会和飞牛包混在一起。
-- **上游带新依赖**（`pnpm-lock.yaml` 变了）：本机先 `pnpm install --frozen-lockfile`；CI 的依赖缓存 key 走 `hashFiles('pnpm-lock.yaml')`，会自动换新，不用手动清。
+- **上游带新依赖**（`pnpm-lock.yaml` 变了）：本机先 `pnpm install --frozen-lockfile`；CI 的依赖缓存 key 走 `hashFiles('pnpm-lock.yaml')`，会自动换新，不用手动清。**但 lock 变了不等于依赖变了**——2026-11-24 那次 `pnpm-lock.yaml` 变是因为新增了 workspace 包 `packages/session-contract`，`pnpm install` 只回一句「Already up to date」。真正的坑不在装依赖，而在**构建顺序**：core 依赖该包的 `dist/`，而群晖 `synology/build.sh` 不会自动跟上飞牛新增的 `pnpm build:contract`，漏了就直接 `TS2307` 构建失败（详见第 2 节末）。所以看到 lock 变动时，除了 `pnpm install`，还要 diff 一下 `pnpm-workspace.yaml` 和两边 `build.sh`。
 - **出包只能在 Linux**：Windows 上只能做到构建那步，`synology/build.sh` 有系统闸。走 CI（`.github/workflows/build-spk.yml`，手动触发时 `spk_version` 留空则按「上海日期-当天第几个包」自动选号，`publish_release` 决定是否连带发 Release）或在 NAS / Linux 机上跑脚本。
 - **armv8 仍是未实机验证**：上游改动不会因为 CI 变绿就变成「armv8 已支持」。
 - **提交和推送是两次授权**：合并完先报状态，别自己 `git push`。

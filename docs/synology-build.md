@@ -177,6 +177,7 @@ grep -a qq-farm-bot /var/log/synopkg.log | tail -20      # 安装链路：preins
 | 装到一半报「安装失败」，看不出为什么 | `INFO` 字段问题（字段名拼错、`yes`/`no` 写了别的、`version` 分段非纯数字、`arch` 与机型不符、`checksum` 不匹配） | 具体原因只在 `/var/log/synopkg.log`；`uname -m` 拿机器架构，`synoinfo.conf` 的 `arch=` 可反查 DSM 的架构名 |
 | 页面能打开但图裂、实时状态不动 | 构建期 `VITE_BASE` 与运行期 `QQ_FARM_GATEWAY_PREFIX` 是两个独立真理源，必须与「反代是否保留前缀」三者一致 | 本项目挂根路径，两者都留默认值即可；要改子路径反代就必须成对设置且反代保留前缀 |
 | `vite build` 被 OOM kill | 内存不够 | 加 swap，或换台 x86 Linux 跑完 `1/6`～`3/6`，把 `synology/out/payload/` 传上群晖，再手动续跑 `4/6`～`6/6` 那几行（脚本没有分步开关） |
+| `2/6` 阶段报 `TS2307: Cannot find module '@qq-farm-bot/session-contract'` | 上游 #181 新增了 workspace 包 `packages/session-contract`，core 直接 require 它的 `dist/`。`build:ts` 之前必须先跑 `pnpm build:contract`——飞牛 `fnos/build.sh` 有这一步、群晖的是独立脚本，容易漏 | `synology/build.sh` 已在 `build:ts` 前补上 `pnpm build:contract`（2026-11-24）。若自己改顺序，注意 `packages/session-contract/dist/` 不进 git，每次干净克隆都得先构建 |
 | 重复构建很慢 | `pnpm install` 每次重跑 | `SKIP_INSTALL=1`；node dist 用 `NODE_CACHE_DIR` 复用 |
 | `sc-qq-farm-bot` 身份去构建反而更慢 | pnpm store 路径跟着用户走，换用户等于重解一遍依赖 | 构建用哪个都行，但**全程同一个用户**；构建与安装都不需要 `sc-` 账号参与 |
 | 在 Windows 上打包后 DSM 起不来 | MSYS/Git Bash 丢可执行位，还会重写形如 `/xxx` 的环境变量值 | 别在 Windows 出包；`build.sh` 也已经先拦住 |
