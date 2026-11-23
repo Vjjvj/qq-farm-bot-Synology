@@ -129,6 +129,9 @@ echo "==> 2/6 构建前端与后端"
 # VITE_BASE 留空即 base="/"，运行时也不设 QQ_FARM_GATEWAY_PREFIX。
 # FPK_VERSION 是上游 web 里的版本注入位（vite define __FPK_VERSION__），群晖版复用它写 spk 版本号
 FPK_VERSION="${APP_VERSION}" pnpm -C web build
+# 上游 #181 新增 workspace 包 @qq-farm-bot/session-contract，core 的 runtime-paths / worker-manager
+# 直接 require 它的 dist；不先构建，下面的 build:ts 和 esbuild 打包都会找不到模块。
+pnpm build:contract
 pnpm -C core build:ts
 
 echo "==> 3/6 打包后端为单文件 JS"

@@ -63,3 +63,8 @@ fnos/out/
 
 # DSM 打包输出
 synology/out/
+
+# 上游在线更新/回退产生的运行时目录与工作区包产物
+/runtime/
+/releases/
+/packages/*/dist/

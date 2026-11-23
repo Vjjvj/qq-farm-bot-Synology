@@ -61,7 +61,7 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    app.post('/api/accounts', (req: Request, res: Response) => {
+    app.post('/api/accounts', async (req: Request, res: Response) => {
         try {
             const rawBody = (req.body && typeof req.body === 'object') ? req.body : {};
             const requestedName = typeof rawBody.name === 'string' ? rawBody.name.trim() : '';
@@ -115,13 +115,13 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
             // 如果是新增，自动启动
             if (!isUpdate) {
                 const newAcc = data.accounts.at(-1);
-                if (newAcc) ctx.provider.startAccount(newAcc.id);
+                if (newAcc) await ctx.provider.startAccount(newAcc.id);
             } else if (isRemarkRelogin) {
                 // Adding with an existing remark is a relogin operation, including for stopped accounts.
-                ctx.provider.restartAccount(payload.id);
+                await ctx.provider.restartAccount(payload.id);
             } else if (wasRunning && !onlyRemarkChanged) {
                 // 如果是更新，且之前在运行，且不是仅修改备注，则重启
-                ctx.provider.restartAccount(payload.id);
+                await ctx.provider.restartAccount(payload.id);
             }
             res.json({ ok: true, data });
         } catch (e: any) {
@@ -129,13 +129,13 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
         }
     });
 
-    app.delete('/api/accounts/:id', (req: Request, res: Response) => {
+    app.delete('/api/accounts/:id', async (req: Request, res: Response) => {
         try {
             const resolvedId = resolveAccId(ctx, req.params.id) || String(req.params.id || '');
 
             const before = ctx.provider.getAccounts();
             const target = findAccountByRef(before.accounts || [], req.params.id);
-            ctx.provider.stopAccount(resolvedId);
+            await ctx.provider.stopAccount(resolvedId);
             const data = deleteAccount(resolvedId);
             if (ctx.provider.addAccountLog) {
                 ctx.provider.addAccountLog('delete', `删除账号: ${(target && target.name) || req.params.id}`, resolvedId, target ? target.name : '');
@@ -228,21 +228,11 @@ function mountAccountRoutes(app: Application, ctx: AdminContext): void {
         res.json({ ok: true, data });
     });
 
-    // [fnos-fork] 2026-11-23 首页合并概览缓存：农场 / 牧场各一份快照（按账号持久化），非当前空间读这里，不实时查游戏
+    // [fnos-fork] 2026-11-23 首页合并概览缓存：农场 / 牧场各一份快照，由后台（fnos-overview-writer）每次拿到数据就写；页面只读，非当前空间读这里
     app.get('/api/fnos/overview-cache', (req: Request, res: Response) => {
         const id = getAccId(ctx, req);
         if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
         res.json({ ok: true, data: require('../../runtime/fnos-overview-cache').getOverviewCache().get(id) });
-    });
-    app.put('/api/fnos/overview-cache/:space', (req: Request, res: Response) => {
-        const id = getAccId(ctx, req);
-        if (!id) return res.status(400).json({ ok: false, error: 'Missing x-account-id' });
-        try {
-            const data = require('../../runtime/fnos-overview-cache').getOverviewCache().set(id, String(req.params.space), req.body);
-            res.json({ ok: true, data });
-        } catch (e: any) {
-            res.status(400).json({ ok: false, error: e?.message || '保存失败' });
-        }
     });
 
     // API: 清空当前账号运行日志

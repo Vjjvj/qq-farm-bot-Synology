@@ -100,7 +100,10 @@ async function loadBag(): Promise<any> {
 }
 
 async function loadRaw(cells?: any): Promise<any> {
-    return { cells: cells || await rpc('cells'), bag: await loadBag() };
+    const raw = { cells: cells || await rpc('cells'), bag: await loadBag() };
+    // [fnos-fork] 2026-11-23 首页概览缓存：牧场自动化每轮 / 页面读取都会走到这里
+    try { require('../../runtime/fnos-overview-hooks').emitOverviewData('ranch', snapshot(raw)); } catch { /* 不影响牧场流程 */ }
+    return raw;
 }
 
 function shedAwaitingActivation(raw: any): any {
@@ -246,6 +249,24 @@ async function ranchCareer(gid: number): Promise<any> {
     };
 }
 
+// [fnos-fork] 2026-11-23 首页概览缓存的牧场生涯：牧场自动化每轮巡查最多拉一次生涯（默认间隔 4 分钟，失败也算一次），
+// 拿到后补发给概览缓存；不再只靠打开牧场概览视图才更新。
+let careerRefreshAt = 0;
+const CAREER_REFRESH_MS = 4 * 60_000;
+async function refreshOverviewCareer(now: number = Date.now(), minIntervalMs: number = CAREER_REFRESH_MS): Promise<boolean> {
+    if (now - careerRefreshAt < minIntervalMs) return false;
+    careerRefreshAt = now;
+    try {
+        const career = await ranchCareer(getUserState().gid);
+        if (!career) return false;
+        require('../../runtime/fnos-overview-hooks').emitOverviewData('ranchCareer', career);
+        return true;
+    } catch {
+        return false;
+    }
+}
+function resetCareerRefreshForTest(): void { careerRefreshAt = 0; }
+
 async function getState(view = 'animals', shopId?: number, hostGid?: string): Promise<any> {
     if (!['animals', 'facilities', 'bag', 'shop', 'market', 'tasks', 'friends', 'illustrated', 'activities', 'cans', 'overview', 'mall', 'visitors'].includes(view)) throw error('INVALID_ARGUMENT', '未知牧场页面'); // [fnos-fork] visitors
     if (!isUnlocked()) return { unlocked: false, sceneId: 2, reason: '牧场尚未解锁，请先在游戏中完成开启条件' };
@@ -253,7 +274,10 @@ async function getState(view = 'animals', shopId?: number, hostGid?: string): Pr
         const raw = await loadRaw(cells);
         const state = snapshot(raw);
         state.pendingOperations = require('./operation-state').forCurrentAccount().pending().map(pendingOperationView);
-        if (view === 'overview') state.career = await ranchCareer(getUserState().gid);
+        if (view === 'overview') {
+            state.career = await ranchCareer(getUserState().gid);
+            try { require('../../runtime/fnos-overview-hooks').emitOverviewData('ranch', state); } catch { /* 同上 */ }
+        }
         if (view === 'bag') state.bag = inventory(raw);
         if (view === 'shop') state.shop = await catalog(raw, Number(shopId ?? 5));
         if (view === 'market') state.market = await market(raw);
@@ -323,4 +347,4 @@ async function resourceBalances(keys: string[]): Promise<any[]> {
     });
 }
 
-module.exports = { getState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, canLockRanchItem, ranchCareer, resourceBalance, isRanchResource, resourceBalances, animalDto };
+module.exports = { getState, loadBag, loadRaw, isPendingShed, shedAwaitingActivation, snapshot, balance, bagItems, inventory, salePrices, taskList, catalog, market, readMarketRotation, canCatalog, ranchMallCatalog, canLockRanchItem, ranchCareer, refreshOverviewCareer, resetCareerRefreshForTest, resourceBalance, isRanchResource, resourceBalances, animalDto };

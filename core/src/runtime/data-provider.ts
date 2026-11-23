@@ -17,9 +17,9 @@ interface DataProviderOptions {
     broadcastConfigToWorkers: (accountId?: string) => void;
     buildConfigSnapshotForAccount: (accountId: string) => any;
     broadcastGameConfigReload?: () => void;
-    startWorker: (account: any) => boolean;
-    stopWorker: (accountId: string) => void;
-    restartWorker: (account: any) => void;
+    startWorker: (account: any) => boolean | Promise<boolean>;
+    stopWorker: (account: any) => void | Promise<void>;
+    restartWorker: (account: any) => void | Promise<void>;
 }
 
 function createDataProvider(options: DataProviderOptions) {
@@ -177,7 +177,6 @@ function createDataProvider(options: DataProviderOptions) {
         ),
         doFriendOp: (accountRef: string, gid: number, opType: string) => callWorkerApi(resolveAccountRefId(accountRef), 'doFriendOp', gid, opType, true),
         delFriend: (accountRef: string, gid: number) => callWorkerApi(resolveAccountRefId(accountRef), 'delFriend', gid),
-        lookupStealRatios: (accountRef: string, gids: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'lookupStealRatios', gids), // [fnos-fork] 好友页偷收比筛选
         getBulletinList: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getBulletinList'), // [fnos-fork] 游戏公告列表
         getBulletinDetail: (accountRef: string, bulletinId: unknown) => callWorkerApi(resolveAccountRefId(accountRef), 'getBulletinDetail', bulletinId), // [fnos-fork] 游戏公告正文
         getBag: (accountRef: string) => callWorkerApi(resolveAccountRefId(accountRef), 'getBag'),
@@ -466,27 +465,27 @@ function createDataProvider(options: DataProviderOptions) {
             return data;
         },
 
-        startAccount: (accountRef: string) => {
+        startAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            startWorker(acc);
+            await startWorker(acc);
             return true;
         },
 
-        stopAccount: (accountRef: string) => {
+        stopAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            if (accountId) stopWorker(accountId);
+            if (accountId) await stopWorker(acc);
             return true;
         },
 
-        restartAccount: (accountRef: string) => {
+        restartAccount: async (accountRef: string) => {
             const accountId = resolveAccountRefId(accountRef);
             const acc = findAccountByAnyRef(accountId || accountRef);
             if (!acc) return false;
-            restartWorker(acc);
+            await restartWorker(acc);
             return true;
         },
 

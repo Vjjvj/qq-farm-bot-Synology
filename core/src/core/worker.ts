@@ -34,7 +34,7 @@ const {
 } = require('../services/warehouse');
 const { checkAndClaimDogSkillGifts } = require('../services/dog-skill-gifts');
 const { isGatewayHealthyForBusiness, nextBusinessBackoffMs } = require('../utils/low-priority-gate');
-const { connect, cleanup, getWs, getUserState, networkEvents, getGatewayLoad } = require('../utils/network');
+const { connect, cleanup, configureHostedSession, activateHostedSession, detachHostedSession, getWs, getUserState, networkEvents, getGatewayLoad } = require('../utils/network');
 const { loadProto } = require('../utils/proto');
 const { runWithRequestClass } = require('../utils/request-context');
 const { setLogHook, log, logWarn, toNum, getSystemDateKey, formatSystemDateTime24 } = require('../utils/utils');
@@ -54,13 +54,16 @@ if (parentPort && workerData && workerData.accountId && !process.env.FARM_ACCOUN
 
 function sendToMaster(payload: Record<string, any>): void {
     if (process.send) {
-        process.send(payload);
+        if (process.connected) process.send(payload);
         return;
     }
     if (parentPort) {
         parentPort.postMessage(payload);
     }
 }
+
+// [fnos-fork] 2026-11-23 首页概览缓存：业务代码读到背包 / 钻石 / 牧场数据时，通过这里交给主进程落盘
+try { require('../runtime/fnos-overview-hooks').setOverviewSink?.((kind: string, data: any) => sendToMaster({ type: 'fnos_overview', kind, data })); } catch { /* 概览缓存不影响 Worker 启动 */ }
 
 function onMasterMessage(handler: (msg: any) => void): void {
     if (process.send) {
@@ -478,6 +481,7 @@ async function runFarmTick(auto: any): Promise<void> {
         // 自己农场的定时任务统一挂在 farm 班次：优先级高于好友任务，低于用户前台操作。
         await runWithRequestClass('farm', async () => {
             if (auto.farm) await checkFarm();
+            void require('../services/fnos-farm-career').refreshFarmCareer(); // [fnos-fork] 概览缓存的农场生涯（节流）
             // [fnos-fork] 2026-11-17 任务 / 礼包是杂项：30 秒内有收获 / 偷菜 / 帮忙到点就留到下一次空闲巡田
             if (!fnosTimetable().miscShouldWait()) {
                 if (auto.task) await checkAndClaimTasks();
@@ -781,18 +785,22 @@ async function runStartupSequence(canContinue: () => boolean = () => loginReady)
 
         if (!loginReady || !canContinue()) return;
         // 登录串行部分跑完，才挂上主循环和后续周期性定时器，避免启动期任务叠跑。
-        startFarmCheckLoop({ externalScheduler: true });
-        startFriendCheckLoop({ externalScheduler: true });
-        startUnifiedScheduler();
-        startDailyRoutineTimer(false);
-        startMysteryShopTimer();
-        // [fnos-fork] 图鉴奖励自动领取 / 自动完成图鉴（都未开启时每轮直接返回，不发请求）
-        require('../services/fnos-illustrated-auto').startFnosIllustratedAuto(workerScheduler, runExclusiveAutomationTask);
-        // [fnos-fork] 偷收比：忽略高比例申请、来偷菜 Bark、自动删除、在线期间偷菜删除（开关都关时不发请求）
-        require('../services/friend/fnos-steal-ratio').startFnosStealRatio(workerScheduler, runExclusiveAutomationTask);
+        startBusinessLoops();
     } catch (e: any) {
         log('系统', `登录启动序列执行失败: ${e.message}`, { module: 'system', event: '启动序列', result: 'error' });
     }
+}
+
+function startBusinessLoops(): void {
+    startFarmCheckLoop({ externalScheduler: true });
+    startFriendCheckLoop({ externalScheduler: true });
+    startUnifiedScheduler();
+    startDailyRoutineTimer(false);
+    startMysteryShopTimer();
+    // [fnos-fork] 图鉴奖励自动领取 / 自动完成图鉴（都未开启时每轮直接返回，不发请求）
+    require('../services/fnos-illustrated-auto').startFnosIllustratedAuto(workerScheduler, runExclusiveAutomationTask);
+    // [fnos-fork] 在线期间偷菜删除（开关关时不发请求）
+    require('../services/friend/fnos-steal-ratio').startFnosStealRatio(workerScheduler, runExclusiveAutomationTask);
 }
 
 function runMysteryShopTick(): Promise<void> {
@@ -913,8 +921,8 @@ onMasterMessage(async (msg: any) => {
     try {
         if (msg.type === 'start') {
             await startBot(msg.config);
-        } else if (msg.type === 'stop') {
-            await stopBot();
+        } else if (msg.type === 'stop' || msg.type === 'detach') {
+            await stopBot(msg.type === 'detach');
         } else if (msg.type === 'api_call') {
             handleApiCall(msg);
         } else if (msg.type === 'config_sync') {
@@ -1081,7 +1089,15 @@ async function startBot(config: any): Promise<void> {
         try { require('../services/friend/fnos-steal-ratio').rememberSelfGid(); } catch { /* [fnos-fork] 记下本账号 GID，供其他账号排除大小号 */ }
         const accountId = process.env.FARM_ACCOUNT_ID || '';
         initStatsWithPersistence(accountId, Number(latest.gold || 0), Number(latest.exp || 0), Number(latest.coupon || 0));
+        if (!canContinueLogin()) return;
+        if (config.sessionId) {
+            startBusinessLoops();
+            syncStatus();
+            await activateHostedSession();
+            return;
+        }
         resetSessionGains();
+        await activateHostedSession();
 
         // 登录成功后启动各模块
         await runExclusiveAutomationTask('invite_codes', processInviteCodes);
@@ -1097,6 +1113,7 @@ async function startBot(config: any): Promise<void> {
         await runExclusiveAutomationTask('startup_sequence', () => runStartupSequence(canContinueLogin));
     };
 
+    configureHostedSession(config);
     connect(code, onLoginSuccess);
 
     // 启动定时状态同步
@@ -1131,7 +1148,7 @@ function detachRuntimeListeners(): void {
     }
 }
 
-function quiesceBot(reason: string): void {
+function quiesceBot(reason: string, detach = false): void | Promise<void> {
     shutdownStarted = true;
     runtimeGeneration += 1;
     isRunning = false;
@@ -1143,14 +1160,19 @@ function quiesceBot(reason: string): void {
     cleanupTaskSystem();
     workerScheduler.clearAll();
     detachRuntimeListeners();
-    cleanup(reason);
+    const done = detach ? detachHostedSession() : cleanup(reason);
     syncStatus(true);
+    return done;
 }
 
-async function stopBot(): Promise<void> {
+if (process.send) process.once('disconnect', () => { void stopBot(true); });
+
+async function stopBot(detach = false): Promise<void> {
     if (!shutdownStarted) {
         saveStats();
-        quiesceBot('主动停止');
+        try { await quiesceBot(detach ? '后端更新' : '主动停止', detach); }
+        finally { exitWorker(0); }
+        return;
     }
     exitWorker(0);
 }
@@ -1165,7 +1187,7 @@ function handleTerminalDisconnect(payload: any): void {
         source, disconnectCode: code, reason, phase, diagnostics: payload?.diagnostics || null,
     });
     saveStats();
-    quiesceBot(`连接断开: ${source}`);
+    void Promise.resolve(quiesceBot(`连接断开: ${source}`, true)).catch((err: Error) => logWarn('连接', err.message));
     sendToMaster({
         type: 'account_disconnected',
         source,
@@ -1186,7 +1208,7 @@ function onKickout(payload: any): void {
     const diagnostics = payload?.diagnostics || null;
     log('系统', `检测到踢下线，准备自动停止账号。原因: ${reason} (${reasonCode})`, { reasonCode, diagnostics });
     saveStats();
-    quiesceBot(`踢下线: ${reason}`);
+    void Promise.resolve(quiesceBot(`踢下线: ${reason}`)).catch((err: Error) => logWarn('连接', err.message));
     sendToMaster({ type: 'account_kicked', reason, reasonCode, diagnostics });
     setTimeout(exitWorker, 300, 0);
 }
@@ -1287,9 +1309,6 @@ async function handleApiCall(msg: any): Promise<void> {
                     break;
                 case 'delFriend':
                     result = await deleteFriend(args[0]);
-                    break;
-                case 'lookupStealRatios': // [fnos-fork] 好友页按偷收比筛选时批量查生涯
-                    result = await require('../services/friend/fnos-steal-ratio').lookupStealRatios(args[0]);
                     break;
                 case 'getSeeds':
                     result = await getAvailableSeeds(args[0] === true);
