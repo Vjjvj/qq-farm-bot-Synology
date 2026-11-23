@@ -58,7 +58,21 @@ git diff --name-only "$base" upstream/master   # 上游改过的文件
 
   这次要额外做一步：**上游改产品描述时，要读一遍它改的那句话，确认它是否说中了我们这边也同样成立的事实**。本次上游把「今日牧场」扩写成「今日农场 / 今日牧场」并补了「按北京时间 0 点切日」——这两个功能都来自飞牛 fork（`eb97f20`、`8043edf`），已经随 master 一起合进来了，所以那句话对我们同样成立，留着即可。反过来若上游描述的是飞牛独有的行为（如 Docker、端口、fpk 版本号），就必须改写成群晖的对应说法。
 
+  反过来说，**上游删功能时，我们 README 正文里对应那段产品描述必须跟着删或改写**，哪怕合并本身零冲突。2026-11-23 那次就是：交集为空、合并干净，但上游把运行日志的「偷菜日志 / 报错日志」分栏整个取消了，而我们的 README 正文还写着「运行日志分为三栏」。这种情况 `git merge` 不会报警，测试也不会失败，只有人读一遍 README 才能发现。做法是合完后按上游变更说明里的关键词回头 grep 一遍本仓库 README：
+
+  ```sh
+  Select-String -Path README.md -Pattern '偷菜日志|报错日志|分栏'
+  ```
+
+  命中就用「升级会少什么」的口吻改写，而不是直接删掉——用户需要知道功能消失这件事。
+
 还有一件跟冲突无关、但每次同步都该留意的：**上游也在往自己的仓库里叠 fork 功能**（飞牛 fork 的增强，如 2026-11-17 带进来的牧场好友等级排序、牧场最近访客，以及后来的五条调度/日志分支）。这些提交同样以 `[fnos-fork]` 标注，和本仓库的 `[fnos-fork]` 撞名但互不相关——`grep fnos-fork` 看到的并不都是自己写的，改代码前先 `git log -1` 看是谁提交的。
+
+**上游的 fork 特性经常先在自己的长命分支上开发，攒够了再一次性 `Merge` 进 master**。2026-11-22 的「今日农场」来自 `fnos/today-farm-summary`，2026-11-23 的「首页合并概览」「取消日志分栏」「牧歌自动领取」分别来自 `fnos/merged-overview`、`fnos/unify-farm-log`、`fnos/muge-auto-claim`。这意味着：
+
+- `git log --oneline master..upstream/master` 里会看到 `Merge <分支名>:` 形式的申请提交，**一个分支入口可能带进来几天的改动**，别只数 PR 个数——11-23 那批真正的大头是三个 fork 分支（其中 `merged-overview` 一口气改了 `Dashboard.vue` 839 行、删掉 `RanchOverview.vue`），上游 PR 只有两个。
+- 上游的这些分支**可能中途自我推翻**。11-23 里 `5a0b653` 先让偷菜被拒不写日志，四个提交后 `659dfeb` 又还原了它。所以读变更说明要读到最新那条为准，别把中间态当成最终行为。
+- 分支合并还可能在 master 上留下**先删后加**的痕迹（这次 `RanchOverview.vue` 被删）。合完顺手 `Test-Path` 一下说明里提到的被删文件，确认状态和说明一致。
 
 **交集为空也别直接合完就走：先读一遍上游的变更说明，看它有没有「我自己刻意没引入上游某段」的决定**。2026-11-18 那次就是例子：上游 `2026.11.17.3` 的说明里明确写了 #148 的 `initialFarmCheckDone` / `initialFriendCheckDone` / `ranchDeferredUntil`（牧场按低优先级闸门推迟）**与飞牛 fork 的农牧轮流调度冲突，它自己没引入**。这种「上游主动剔除」的部分，如果我们机械地全盘 merge，就会把上游扔掉的逻辑重新带回来，而且**测试不会拦**（那套逻辑原本就没有测试覆盖群晖侧的分支）。
 
@@ -76,7 +90,7 @@ Select-String -Path core/src/core/worker.ts -Pattern 'initialFarmCheckDone|initi
 git merge upstream/master
 ```
 
-**验证，四条都要过**。2026-11-22 那次合并（上游 `eef0d5e`，四个飞牛版本、三个 PR 加「今日农场」分支一批进来）的实测：core 457 通过、web 73 通过、`vue-tsc` 无输出、`web build` 成功。**用例数会随上游增删测试双向变化**：11-15 那次上游下架奶茶 fork 功能，一次删掉 6 个 core 测试文件与 2 个 web 测试文件，core 从 414 掉到 359、web 从 52 掉到 47；11-16 上游加牧场，core 回到 387、web 回到 52；11-17 白天加好友等级与最近访客，core 到 399、web 到 55；11-17 晚上游叠了五条调度/日志分支加三个 PR，core 到 449、web 到 71；11-18 上游只合两个 PR（#147/#148）且没加测试文件，仍是 449/71；11-19 上游 #153 带进 `farm-ripening.test.js`（催熟策略），core 到 453，web 仍 71；11-20 上游四个 PR 只动了 `fnos-timetable.test.js` 的几行断言、没加测试文件，仍是 453/71；11-22「今日农场」带进 4 项 core 测试、日志空间扩到 2 项 web 测试，core 到 457、web 到 73。看到数字变化先确认是不是上游增删的，别当成测试挂了或自己改错了。上游自己的变更说明里通常写了它的用例数（`2026.11.22.1` 记的是 457/73），**合完对一下这两个数**，一致就说明本地没有漏合并的测试改动。
+**验证，四条都要过**。2026-11-23 那次合并（上游 `49660b2`，两个飞牛版本、两个 PR 加三个 fork 分支一批进来）的实测：core 463 通过、web 78 通过、`vue-tsc` 无输出、`web build` 成功。**用例数会随上游增删测试双向变化**：11-15 那次上游下架奶茶 fork 功能，一次删掉 6 个 core 测试文件与 2 个 web 测试文件，core 从 414 掉到 359、web 从 52 掉到 47；11-16 上游加牧场，core 回到 387、web 回到 52；11-17 白天加好友等级与最近访客，core 到 399、web 到 55；11-17 晚上游叠了五条调度/日志分支加三个 PR，core 到 449、web 到 71；11-18 上游只合两个 PR（#147/#148）且没加测试文件，仍是 449/71；11-19 上游 #153 带进 `farm-ripening.test.js`（催熟策略），core 到 453，web 仍 71；11-20 上游四个 PR 只动了 `fnos-timetable.test.js` 的几行断言、没加测试文件，仍是 453/71；11-22「今日农场」带进 4 项 core 测试、日志空间扩到 2 项 web 测试，core 到 457、web 到 73；11-23 带进 `fnos-muge-auto-claim.test.js`、`fnos-overview-cache.test.js` 与 `fnos-overview.test.mjs`，core 到 463、web 到 78。看到数字变化先确认是不是上游增删的，别当成测试挂了或自己改错了。上游自己的变更说明里通常写了它的用例数（`2026.11.23.1` 记的是 463/78），**合完对一下这两个数**，一致就说明本地没有漏合并的测试改动。
 
 **还要单独核一遍「默认值」**。上游改默认值时，测试全绿也不代表升级行为没变——2026-11-17 晚那次上游 #145 把 `RANCH_AUTOMATION_DEFAULTS` 里十几个 `false` 全改成 `true`，测试一条都不会响，但用户升级后牧场会开始自己干活。做法是每批合并后 `git diff <合并前基线> HEAD -- '**/DEFAULT*' '**/*defaults*' '**/config/*.ts'` 扫一遍，再判断影响面：
 
@@ -129,18 +143,18 @@ git diff --name-only --diff-filter=U    # 只要文件名
 
 ## 6. 合并之后
 
-**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-22 那次（合并提交 `0f2db49`）的填法：
+**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-23 那次（合并提交 `70c5eff`）的填法：
 
 | 要素 | 填什么 |
 | --- | --- |
-| 上游到哪个提交 | `eef0d5e` |
-| 对应的飞牛版本号 | `2026.11.22.1`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
-| 本仓库的合并提交号 | `0f2db49` |
-| 带进来哪些用户可见变化 | 「今日农场」汇总（与今日牧场对称，`GET /api/fnos/farm-log-summary`，保留 7 天）；**切日规则改为固定按北京时间 0 点**（不再跟随进程时区）；牧场生涯统计与面板、`ranchOperations` 计数、加速升级 / 商城购买 / 物品锁定三个新操作；商城改名礼包商城、好友列表显示「可清理 N / 可偷取」；普通罐头喂养阶段开关 `ranch_feed_normal_stage`（默认 `longest`）；修复 QQ 初始化 8 位回绕与打包版牧场好友读取 |
-| `core` / `web` 的 `package.json` 是否变 | 只有 `core` 变（上游为官方 pkg 加了 `"scripts": ["dist/**/*.js"]`），`web` 仍 `20261119`、根仍 `20261116`，`pnpm-lock.yaml` 未变——这条要实读再写，别按「上游发版就会 bump」推 |
-| 验证到哪一步 | 四条命令通过（core 457、web 73、`vue-tsc` 无输出、`web build` 成功），与上游 `2026.11.22.1` 自述的用例数一致；**没有用真号验证过**，上游自己也只做到模拟网关冒烟 |
+| 上游到哪个提交 | `49660b2` |
+| 对应的飞牛版本号 | `2026.11.23.1`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
+| 本仓库的合并提交号 | `70c5eff` |
+| 带进来哪些用户可见变化 | **运行日志取消「偷菜日志 / 报错日志」分栏（删功能）**；普通与有机罐头分别设置使用时机（四档 `any` / `longest` / `to_production` / `near_harvest`，新增 `ranch_feed_organic_stage` 默认 `near_harvest`）；好友牧场可同时展开多位好友、赠送牧草、详情分区重排；首页合并农场 / 牧场概览（原 `RanchOverview.vue` 删除）；牧歌初启成长手册奖励自动领取 `mugeAutoClaim`（默认开）；播种失败日志带作物名与种子 ID |
+| `core` / `web` 的 `package.json` 是否变 | **都没变**（根 `20261116`、`core` `20261117`、`web` `20261119`），`pnpm-lock.yaml` 也没变——这条要实读再写，别按「上游发版就会 bump」推 |
+| 验证到哪一步 | 四条命令通过（core 463、web 78、`vue-tsc` 无输出、`web build` 成功），与上游 `2026.11.23.1` 自述的用例数一致；**没有用真号验证过**，上游自己也只做到模拟网关冒烟，且它明说好友牧场新版面没在浏览器里看过 |
 
-这次还多了一类要写进正文的东西：**上游拆开或新增了默认开启的开关**。#162 把 `ranch_market_organic` 拆成两个独立开关（默认都开），#160 新增 `ranch_illustrated`（默认开），11-20 新增 `ranch_activate_shed`（默认开），11-20.2 新增 `ranch_feed_normal_stage`（默认 `longest`，是枚举不是布尔）。和单纯改常量不同，这类改动要看有没有迁移代码：`migrateRanchMarketAutomation` 只给缺失的键填值、已明确设置的独立开关优先，所以老用户不会因为升级突然开始兑松果；但 `ranch_illustrated` 是纯新增字段，老配置里没有这个键，`cloneAccountConfig` 会套上默认值，**等于升级即生效**；`ranch_activate_shed` 介于两者之间——它带一段条件豁免（旧账号同时关了 `ranch_upgrade` 与 `ranch_buy` 时保留手动解锁），写在 `shared-state.ts` 的 `cloneAccountConfig` 附近。判断方法是合完直接看默认值文件里新键有没有配套的归一化 / 迁移函数：
+这次还多了一类要写进正文的东西：**上游拆开或新增了默认开启的开关**。#162 把 `ranch_market_organic` 拆成两个独立开关（默认都开），#160 新增 `ranch_illustrated`（默认开），11-20 新增 `ranch_activate_shed`（默认开），11-20.2 新增 `ranch_feed_normal_stage`（默认 `longest`，是枚举不是布尔），11-23 又新增 `ranch_feed_organic_stage`（默认 `near_harvest`）与 `mugeAutoClaim`（默认开）。和单纯改常量不同，这类改动要看有没有迁移代码：`migrateRanchMarketAutomation` 只给缺失的键填值、已明确设置的独立开关优先，所以老用户不会因为升级突然开始兑松果；但 `ranch_illustrated` 是纯新增字段，老配置里没有这个键，`cloneAccountConfig` 会套上默认值，**等于升级即生效**；`ranch_activate_shed` 介于两者之间——它带一段条件豁免（旧账号同时关了 `ranch_upgrade` 与 `ranch_buy` 时保留手动解锁），写在 `shared-state.ts` 的 `cloneAccountConfig` 附近。判断方法是合完直接看默认值文件里新键有没有配套的归一化 / 迁移函数：
 
 ```sh
 git diff <合并前基线> HEAD -- '**/*defaults*' core/src/config core/src/types/config.ts core/src/models/store/account-config.ts
@@ -148,7 +162,7 @@ git diff <合并前基线> HEAD -- '**/*defaults*' core/src/config core/src/type
 
 **「默认开 + 条件豁免」这种组合一定要单独写清**：只说「默认开」会让关过补栏和升级的用户以为自己的保守设置被打乱，只说「按旧设置豁免」又会让大多数人不知道新功能已生效。11-20 的 `ranch_activate_shed` 就是照着「默认开，但如果你原来同时关了补栏和金券升级、且没设置过这个新开关，就保留手动解锁」来写的。
 
-**枚举型默认值别当成「开关」写**：`ranch_feed_normal_stage` 默认 `longest` 不是开 / 关，而是「普通罐头只喂最长生长阶段的动物」。这种要写清楚两个可选值分别意味着什么、去哪里改，光说「新增一个设置项」等于没说。
+**枚举型默认值别当成「开关」写**：`ranch_feed_normal_stage` 默认 `longest` 不是开 / 关，而是「普通罐头只喂最长生长阶段的动物」。这种要写清楚两个可选值分别意味着什么、去哪里改，光说「新增一个设置项」等于没说。2026-11-23 这批又把枚举从两档扩到四档（`any` / `longest` / `to_production` / `near_harvest`）并加了第二个枚举 `ranch_feed_organic_stage`（默认 `near_harvest`）——**枚举扩值时更要重读默认值**，因为「四档里默认哪一档」和「两档里默认哪一档」是两件不同的事，不能照抄上一版的说明。
 
 那批还新增了一个要素，将来碰到同类情况要照做：**上游在变更说明里写了「我刻意没引入 X」时，X 必须作为负面清单逐项核对**。这次是 #148 的牧场低优先级闸门（`initialFarmCheckDone` / `initialFriendCheckDone` / `ranchDeferredUntil`），上游因为和农牧轮流调度冲突没有引入，我们 merge 后 grep 确认它们只出现在 `[fnos-fork]` 注释里，并在 README 里单独说明「我们也没接、为什么」。11-20、11-22 两次上游说明里仍然写着「不引入上游 `ranchDeferredUntil`」，所以这条负面清单**每次都要重新核**，别以为上次核过就永远成立。
 
