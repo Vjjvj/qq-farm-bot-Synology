@@ -1,7 +1,9 @@
+import type { RanchFeedStage } from '../../config/ranch-automation';
+import { RANCH_NEAR_HARVEST_MS } from '../../config/ranch-automation';
 export {};
 
 const { rpc, inScene } = require('./transport');
-const { loadRaw, snapshot, balance, taskList, catalog, market, canCatalog, ranchMallCatalog, canLockRanchItem, resourceBalance, salePrices, shedAwaitingActivation } = require('./state');
+const { loadBag, loadRaw, snapshot, balance, taskList, catalog, market, canCatalog, ranchMallCatalog, canLockRanchItem, resourceBalance, salePrices, shedAwaitingActivation } = require('./state');
 const { animalMap, cubMap, canMap, facilityMap, itemMap, taskMap, error, positiveId, positiveCount, quantity, itemDto, sumItems, signature } = require('./model');
 const reservations = require('./operation-state');
 const { recordOperation } = require('../stats');
@@ -35,6 +37,26 @@ function animalRefs(animals: any[]): any[] {
     return animals.map(animal => ({ ranch_inst_id: quantity(animal.ranch_inst_id), animal_inst_id: animal.animal_inst_id }));
 }
 
+function feedDurations(config: any): number[] {
+    return [0, config.infant_sec, config.grow_sec, config.product_round_sec, config.mature_sec];
+}
+
+function matchesFeedStage(animal: any, stage: RanchFeedStage, nowMs: number): boolean {
+    if (stage === 'to_production') return animal.stage === 2;
+    if (stage === 'near_harvest') {
+        const remaining = Number(animal.mature_ready_at_ms) - nowMs;
+        return animal.stage === 4 && remaining > 0 && remaining <= RANCH_NEAR_HARVEST_MS;
+    }
+    if (stage === 'longest') {
+        const config = animalMap.get(Number(animal.animal_id));
+        if (!config) return false;
+        const durations = feedDurations(config);
+        const current = durations[animal.stage];
+        return current > 0 && current === Math.max(...durations);
+    }
+    return true;
+}
+
 function isClientReportedTask(task: any): boolean {
     if (!task?.unlocked || task.claimed) return false;
     if (BigInt(task.total) <= 0n || BigInt(task.progress) >= BigInt(task.total)) return false;
@@ -50,7 +72,7 @@ function remainingUpgradeSeconds(endMs: number): number {
     return Math.max(0, Math.ceil(endMs / 1000) - getServerTimeSec());
 }
 
-async function planAction(action: string, input: any, raw: any, produceTargets?: any[]): Promise<any> {
+async function planAction(action: string, input: any, raw: any, produceTargets?: any[], feedStage?: RanchFeedStage): Promise<any> {
     if (!ACTIONS.includes(action)) throw error('INVALID_ARGUMENT', '不支持的牧场操作');
     const plan: any = { action, label: LABELS[action], route: action, payload: {}, costItems: [], marker: null, expectedRewards: [], count: 1 };
     if (action === 'buy') {
@@ -121,8 +143,14 @@ async function planAction(action: string, input: any, raw: any, produceTargets?:
         const facilityId = positiveId(input.facilityId, '牧草机');
         const count = positiveCount(input.count);
         const facility = raw.cells.facilities.find((entry: any) => quantity(entry.instance_id) === facilityId && entry.module_type === 8);
+        if (raw.recipient && (!facility?.feed_machine || facility.state !== 1)) throw error('RANCH_STATE_CHANGED', '好友牧草机已变化，请刷新');
         if (!facility?.feed_machine || count > facility.capacity - facility.feed_machine.feed_count) throw error('RANCH_GRASS_CAPACITY', '牧草机剩余容量不足');
         plan.payload = { instance_id: facilityId, add_count: count, use_gold: false };
+        if (raw.recipient) {
+            plan.payload.host_gid = raw.recipient.gid;
+            plan.label = `向${raw.recipient.name}赠送牧草`;
+            plan.count = count;
+        }
         plan.costItems = [itemDto({ id: 7001, count })];
         plan.marker = { capacity: facility.capacity, level: facility.level };
     } else if (action === 'useCan') {
@@ -141,22 +169,20 @@ async function planAction(action: string, input: any, raw: any, produceTargets?:
         if (![1, 2].includes(bucketType)) throw error('INVALID_ARGUMENT', '请选择有机或普通罐头');
         const feedable = selectedAnimals(raw, input, () => true).filter(animal => animal.can_feed);
         const unused = feedable.filter(animal => bucketType === 1 || !animal.limited_can_used);
-        const animals = bucketType === 2 && input.normalStage === 'longest' ? unused.filter((animal) => {
-            const config = animalMap.get(Number(animal.animal_id));
-            if (!config) return false;
-            const durations = [0, config.infant_sec, config.grow_sec, config.product_round_sec, config.mature_sec];
-            const current = durations[animal.stage];
-            return current > 0 && current === Math.max(...durations);
-        }) : unused;
+        const strategy = feedStage ?? (bucketType === 2 && input.normalStage === 'longest' ? 'longest' : 'any');
+        const nowSeconds = getServerTimeSec();
+        const animals = unused.filter(animal => matchesFeedStage(animal, strategy, nowSeconds * 1000));
         if (!animals.length) plan.message = feedable.length ? '普通罐头本轮已使用' : '当前没有可喂养的动物';
-        if (unused.length && !animals.length) plan.message = '当前没有处于最长生长阶段的可喂养动物';
+        if (unused.length && !animals.length) {
+            plan.message = strategy === 'longest' ? '当前没有处于最长生长阶段的可喂养动物' : '当前没有符合罐头使用时机的动物';
+        }
         plan.payload = { targets: animalRefs(animals), bucket_type: bucketType };
         const maxSeconds = animals.reduce((sum, animal) => {
             const config = animalMap.get(Number(animal.animal_id));
             if (!config) throw error('RANCH_CONFIG_UNKNOWN', '动物阶段配置尚未同步');
-            const durations = [0, config.infant_sec, config.grow_sec, config.product_round_sec, config.mature_sec];
+            const durations = feedDurations(config);
             const deadlines = [0, animal.infant_ready_at_ms, animal.grow_ready_at_ms, animal.produce_ready_at_ms, animal.mature_ready_at_ms];
-            const remaining = Math.max(0, Math.ceil(Number(deadlines[animal.stage]) / 1000) - getServerTimeSec());
+            const remaining = Math.max(0, Math.ceil(Number(deadlines[animal.stage]) / 1000) - nowSeconds);
             const upperBound = Math.max(durations[animal.stage] || 0, Math.ceil(remaining / 3600) * 3600);
             if (!upperBound) throw error('RANCH_PRICE_UNKNOWN', '当前阶段的罐头消耗无法确认');
             return sum + BigInt(upperBound);
@@ -315,12 +341,23 @@ async function planAction(action: string, input: any, raw: any, produceTargets?:
     return plan;
 }
 
-async function prepareAction(action: string, input: any = {}): Promise<any> {
+type GrassRecipient = { gid: string; name: string };
+
+function inActionScene(action: string, input: any, run: (cells: any, recipient?: GrassRecipient) => Promise<any>): Promise<any> {
+    if (action === 'addGrass' && input.hostGid !== undefined) {
+        return require('./friends').withFriendVisit(input.hostGid, (entry: any, host: string) =>
+            run(entry.homestead_cells, { gid: host, name: entry.basic.name }));
+    }
+    return inScene(run);
+}
+
+async function prepareAction(action: string, input: any = {}, feedStage?: RanchFeedStage): Promise<any> {
     if (action === 'steal') return require('./friends').prepareSteal(input);
     if (action === 'fnosBad') return require('./friends').prepareBad(input); // [fnos-fork] 好友列表「捣乱」
     if (['stroke', 'putMosquito', 'cleanFriend'].includes(action)) return require('./friends').prepareInteraction(action, input);
-    return inScene(async (cells: any) => {
-        const plan = await planAction(action, input, action === 'claimIllustrated' ? null : await loadRaw(cells));
+    return inActionScene(action, input, async (cells, recipient) => {
+        const raw = action === 'claimIllustrated' ? null : { ...await loadRaw(cells), recipient };
+        const plan = await planAction(action, input, raw, undefined, feedStage);
         return { action, label: plan.label, costs: plan.costs, costItems: plan.costItems, rewards: plan.expectedRewards, count: plan.count,
             expected: { signature: plan.signature }, skipped: plan.count === 0, message: plan.message };
     });
@@ -348,7 +385,7 @@ function animalsInResults(ranches: any[], rows: any[]): any[] {
     return ranches.flatMap(ranch => ranch.animals.filter((animal: any) => ids.has(`${quantity(ranch.ranch_inst_id)}:${animal.animal_inst_id}`)));
 }
 
-async function operate(action: string, input: any = {}): Promise<any> {
+async function operate(action: string, input: any = {}, feedStage?: RanchFeedStage): Promise<any> {
     if (['stroke', 'putMosquito', 'cleanFriend'].includes(action)) return require('./friends').interact(action, input);
     if (action === 'fnosBad') return require('./friends').bad(input); // [fnos-fork] 好友列表「捣乱」
     if (action === 'acknowledge') return inScene(async () => {
@@ -360,12 +397,14 @@ async function operate(action: string, input: any = {}): Promise<any> {
 
     async function run(action: string, input: any, before: any, produceTargets?: any[]): Promise<any> {
         const direct = input.direct === true && input.expected === undefined && DIRECT_ACTIONS.has(action);
-        const plan = await planAction(action, input, before, produceTargets);
+        const plan = await planAction(action, input, before, produceTargets, feedStage);
         if (plan.count === 0) return { status: 'skipped', snapshot: snapshot(before), costs: [], rewards: [], notice: plan.message };
         if (!direct && input.expected?.signature !== plan.signature) throw error('RANCH_OFFER_CHANGED', '牧场状态、商品或费用已变化，请重新确认');
         let after: any = null;
         let fedResults: any[] = [];
-        const result = await reservations.forCurrentAccount().spend({ target: `ranch:${action}:${input.goodsId || input.facilityId || input.uid || input.taskId || input.ranchId || 'all'}`, label: plan.label, costs: plan.costs, balances: plan.balances }, async () => {
+        const target = before.recipient ? `ranch:addGrass:${before.recipient.gid}:${plan.payload.instance_id}`
+            : `ranch:${action}:${input.goodsId || input.facilityId || input.uid || input.taskId || input.ranchId || 'all'}`;
+        const result = await reservations.forCurrentAccount().spend({ target, label: plan.label, costs: plan.costs, balances: plan.balances }, async () => {
             let reply: any; let rewards: any[] = []; let actualCosts = plan.costItems;
             let completed = plan.count;
             if (action === 'claimDailyShare') {
@@ -409,7 +448,10 @@ async function operate(action: string, input: any = {}): Promise<any> {
                     payload = { ...payload, count };
                 }
                 reply = await rpc(plan.route, payload, true);
-                if (action === 'setItemLock') {
+                if (before.recipient) {
+                    const filled = reply.detail?.feed_count;
+                    if (filled === undefined || filled < plan.count || filled > plan.marker.capacity) unknown(action, '好友牧草机回包不匹配');
+                } else if (action === 'setItemLock') {
                     const confirmed = reply.item_uids.map(quantity).sort();
                     if (JSON.stringify(confirmed) !== JSON.stringify(plan.payload.item_uids)) unknown(action, '锁定回包与物品不符');
                 } else if (action === 'buyCan' || action === 'buyMall') {
@@ -494,7 +536,10 @@ async function operate(action: string, input: any = {}): Promise<any> {
                     receiptCells = undefined;
                 }
             }
-            try { after = await loadRaw(receiptCells); } catch { /* Confirmed receipts remain useful if the view refresh fails. */ }
+            try {
+                // 好友赠送回包只含牧草机状态，读取当前账号背包确认实际扣量。
+                after = before.recipient ? { ...before, bag: await loadBag() } : await loadRaw(receiptCells);
+            } catch { /* Confirmed receipts remain useful if the view refresh fails. */ }
             if (plan.autoPlaceAnimalId) {
                 if (!after) unknown(action, '自动放养后的栏位状态未能读取');
                 const previous = new Set(before.cells.facilities.flatMap((f: any) => (f.ranch?.animals || []).map((animal: any) => `${quantity(f.instance_id)}:${animal.animal_inst_id}`)));
@@ -533,9 +578,11 @@ async function operate(action: string, input: any = {}): Promise<any> {
             if (!skipped && completed > 0 && (action === 'harvest' || action === 'produce')) {
                 recordOperation(action, completed, 'ranch');
             }
-            const notice = action === 'release' || action === 'sell' && input.all !== true ? `${plan.label}完成${rewards.length ? `，获得 ${sumItems(rewards).map((item: any) => `${item.name} ×${item.count}`).join('、')}` : ''}`
+            const notice = before.recipient ? `已向${before.recipient.name}赠送 ${completed} 份牧草`
+                : action === 'release' || action === 'sell' && input.all !== true ? `${plan.label}完成${rewards.length ? `，获得 ${sumItems(rewards).map((item: any) => `${item.name} ×${item.count}`).join('、')}` : ''}`
                 : plan.resultKeys && completed < plan.count ? `已完成 ${completed} / ${plan.count} 项，其余状态已变化，请刷新核对` : undefined;
-            return { status: skipped ? 'skipped' : 'confirmed', snapshot: after ? snapshot(after) : null, refreshRequired: !after, costs: actualCosts, notice,
+            return { status: skipped ? 'skipped' : 'confirmed', snapshot: after && !before.recipient ? snapshot(after) : null,
+                refreshRequired: !after || !!before.recipient, costs: actualCosts, notice,
                 rewards: sumItems(rewards), completed,
                 bucketRemainingSeconds: action === 'feed' ? quantity(reply.bucket_remain_secs) : undefined,
                 harvestedAnimals: action === 'harvest' ? reply.op_results.filter((entry: any) => entry.kind === 1).length : 0,
@@ -564,7 +611,8 @@ async function operate(action: string, input: any = {}): Promise<any> {
         }
     }
 
-    return inScene((cells: any) => reservations.forCurrentAccount().withLock(async () => run(action, input, await loadRaw(cells))));
+    return inActionScene(action, input, (cells, recipient) =>
+        reservations.forCurrentAccount().withLock(async () => run(action, input, { ...await loadRaw(cells), recipient })));
 }
 
 module.exports = { prepareAction, operate, ACTIONS, planAction };
