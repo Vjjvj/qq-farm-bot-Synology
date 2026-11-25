@@ -68,4 +68,6 @@ synology/out/
 /runtime/
 /releases/
 /packages/*/dist/
+
+# 上游 #183 起构建走 turbo，本地缓存目录
 .turbo/

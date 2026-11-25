@@ -85,6 +85,13 @@ sha256sum -c qq-farm-bot_2026.11.02-1_x86_64.spk.sha256
 > `setsid nohup bash -c 'NODE_CACHE_DIR=… bash synology/build.sh > build.log 2>&1; echo $? > build.done' &`
 > 然后本地 `while [ ! -s build.done ]; do sleep 5; done; cat build.log` 收结果。
 
+**上游 2026-11-25 起前端构建走 turbo，但群晖脚本不受影响**：根 `package.json` 的 `build:contract` 换成了 `turbo run build --filter=./packages/session-contract`，`synology/build.sh` 调的仍是「`pnpm -C web build` → `pnpm build:contract` → `pnpm -C core build:ts`」，这一步在脚本里不用改。两点值得知道：
+
+- `turbo` 是根 `devDependencies`（`2.11.13`），必须让 `pnpm install` 装上。用 `SKIP_INSTALL=1` 前确认 `node_modules/.bin/turbo` 存在，否则 `2/6` 会报找不到命令。
+- turbo 会往仓库根写 `.turbo/cache/`。**它已在 `.gitignore` 里**，出包后 `git status` 不该出现它；出现了说明 `.gitignore` 被合并弄脏了。
+
+用 A 方式（`codeload` 拉 tar 包，没有 `.git`）构建时，turbo 会打一行 `WARNING failed to run git diff for dirty hash`。**这是警告不是错误**，实测照样构建成功、产物正常。
+
 ## 三、可覆盖的构建变量
 
 | 变量 | 默认 | 作用 |
@@ -178,6 +185,10 @@ grep -a qq-farm-bot /var/log/synopkg.log | tail -20      # 安装链路：preins
 | 页面能打开但图裂、实时状态不动 | 构建期 `VITE_BASE` 与运行期 `QQ_FARM_GATEWAY_PREFIX` 是两个独立真理源，必须与「反代是否保留前缀」三者一致 | 本项目挂根路径，两者都留默认值即可；要改子路径反代就必须成对设置且反代保留前缀 |
 | `vite build` 被 OOM kill | 内存不够 | 加 swap，或换台 x86 Linux 跑完 `1/6`～`3/6`，把 `synology/out/payload/` 传上群晖，再手动续跑 `4/6`～`6/6` 那几行（脚本没有分步开关） |
 | `2/6` 阶段报 `TS2307: Cannot find module '@qq-farm-bot/session-contract'` | 上游 #181 新增了 workspace 包 `packages/session-contract`，core 直接 require 它的 `dist/`。`build:ts` 之前必须先跑 `pnpm build:contract`——飞牛 `fnos/build.sh` 有这一步、群晖的是独立脚本，容易漏 | `synology/build.sh` 已在 `build:ts` 前补上 `pnpm build:contract`（2026-11-24）。若自己改顺序，注意 `packages/session-contract/dist/` 不进 git，每次干净克隆都得先构建 |
+| `2/6` 阶段 `build:contract` 报 `turbo: command not found`，或 `turbo.json` 找不到 | 上游 #183 把根 `build:contract` 换成了 `turbo run build --filter=./packages/session-contract`，turbo 是根 `devDependencies` | `pnpm install --frozen-lockfile` 没跑或 `SKIP_INSTALL=1` 但依赖没装齐。先单独跑一次 `pnpm install --frozen-lockfile`（会输出 `+ turbo 2.11.13`）再出包。别用 `pnpm dlx turbo` 绕——版本要和 lock 里钉的一致 |
+| `turbo` 报 `WARNING failed to run git diff for dirty hash` | turbo 需要 git 才能算 dirty hash，源码在非 git 目录里（例如从 tar 包解出来构建） | **只是警告，不中断构建**，实测仍正常产出。介意的话在 git 仓库里构建 |
+| `core build` 之后 `dist/gameConfig` 或 `dist/proto` 不见了 | `core/package.json` 的 `prepare:dist`（上游 #183 加的 `tools/clean-dist.cjs`）会先清空 `dist/`，这些资源是 tsc 用 `allowJs` 从 `src/` 编译过去的 | 用 `pnpm -C core build` / `build:ts` 走完整链路，别只跑 `tsc` 单步。实测清空后重建正常，`synology/build.sh` 的 `pnpm -C core build:ts` 不受影响 |
+| `.turbo/` 或 `runtime/`、`releases/` 出现在 `git status` 里 | turbo 的本地缓存目录、上游在线更新的工作目录 | 都已在 `.gitignore` 里（`.turbo/` 是上游 2026-11-25 加的）。若真出现在 untracked 里，先确认 `.gitignore` 没被合并弄丢 |
 | 重复构建很慢 | `pnpm install` 每次重跑 | `SKIP_INSTALL=1`；node dist 用 `NODE_CACHE_DIR` 复用 |
 | `sc-qq-farm-bot` 身份去构建反而更慢 | pnpm store 路径跟着用户走，换用户等于重解一遍依赖 | 构建用哪个都行，但**全程同一个用户**；构建与安装都不需要 `sc-` 账号参与 |
 | 在 Windows 上打包后 DSM 起不来 | MSYS/Git Bash 丢可执行位，还会重写形如 `/xxx` 的环境变量值 | 别在 Windows 出包；`build.sh` 也已经先拦住 |
@@ -194,6 +205,7 @@ grep -a qq-farm-bot /var/log/synopkg.log | tail -20      # 安装链路：preins
 
 - 应用**没有登录页**，信任边界就是「谁能连到这个端口」。包默认写 `ADMIN_HOST="0.0.0.0"`，方便局域网直开，代价是同网段任何人可控制你挂上去的 QQ 账号。
 - 经反代/隧道暴露时，反代必须**清掉 `X-Trim-*` 请求头**：没有这些头时应用把访问者当作管理员，而客户端自己伪造 `X-Trim-Isadmin: false` 反而会把自己降成普通用户。
+- **面板不会自己联网查更新**（2026-11-25 核实）：上游 #182 加的在线更新 / 回滚接口（`/api/system/update/*`）在群晖版没有挂载，设置页也不显示对应卡片。唯一保留的是「前端构建号变了就提示刷新」——它读 `/version.json` 和 `/api/ping` 的 `webBuildId`，**都来自本机后端，不访问 GitHub**。改打包链或合并上游后，按 [`docs/upstream-sync.md`](upstream-sync.md) 第 2 节那四层 grep 复核一遍，别让「检查新版本」的代码被顺路带进来。
 - 想把默认值改掉，改 [`synology/scripts/postinst`](../synology/scripts/postinst) 里那段 `settings.conf` 模板；它只在文件不存在时写入，所以升级不会覆盖用户已改的配置。
 
 ## 相关文档

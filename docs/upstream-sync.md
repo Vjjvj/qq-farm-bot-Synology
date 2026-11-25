@@ -54,6 +54,42 @@ git diff --name-only "$base" upstream/master   # 上游改过的文件
   ```
 
   0 命中才对。这类检查比看测试更可靠——图标名错了 `node --test` 一条都不会响，只有 `web build` 会炸。
+- **2026-11-25（上游 `3e64b41`，本仓库合并提交 `2f05247`）**：交集是 **`.gitignore` + `Sidebar.vue`** 两个，**两个都自动合并成功、零冲突**，`git merge` 一次过。这批 30 个提交、89 个文件、跨三个飞牛版本（`2026.11.24.1` / `.2` / `.3`）、两个上游 PR（#182、#183）加五个 fork 分支，是提交数第二多的一次，但冲突面依然很小——**再次印证冲突量与提交量无关**。
+
+  两个交集文件的具体情形值得记，因为都出了「两边各改一处、git 自动并排」的结果：
+
+  - `.gitignore`：两边在**文件末尾同一位置**各追加了一段（上游一行 `.turbo/`，本地一段 `synology/out/` + 注释）。git 把它们并排留下了，结果是 `.turbo/` 落进了本地那段「上游在线更新/回退产生的运行时目录与工作区包产物」的注释下面，**语义上归错了组**。这次已手工拆开：`.turbo/` 改成独立一条带自己注释（「上游 #183 起构建走 turbo，本地缓存目录」）。这种「自动合并成功但语义错位」的结果 `git merge` 不会报，只有人读一遍才发现。**每次合完 `.gitignore` 都要扫一眼尾部**，别只看有没有冲突标记。
+  - `Sidebar.vue`：上游这批加了 `useUnsavedEditGuard`（未保存编辑保护）、`app-update` store 的「正在重连」状态、以及 `/api/ping` 的 `skipErrorToast`。合完必须重新 grep 群晖化文案，因为上游往同一个文件里加东西时，行号会整体漂移：
+
+    ```sh
+    Select-String -Path web/src/components/Sidebar.vue -Pattern '群晖|spk |飞牛|REPO_URL'
+    ```
+
+    本次结果是 `REPO_URL` 仍指本 fork、`spk v${__FPK_VERSION__}` 兜底 `spk dev` 都在、三处「群晖用户 / 群晖管理员」都在；文件里剩下的「飞牛」字样都在注释里（例如「当前飞牛用户（访问控制由飞牛统一网关负责）」），属上游原样，不用改。**判断标准是「用户可见文案里不能出现飞牛」**，注释可以留。
+
+  这批还带出一个新的核对动作：**上游把功能做成「群晖版不该启用」时，要确认它真的没被接上，而不只是「没冲突」**。上游 #182/#183 的在线更新 / 历史回滚是一整套后端接口加前端卡片，飞牛自己也是刻意不挂载的。合完按四个层次各查一遍：
+
+  ```sh
+  # 1 路由没挂：只剩注释里提到 system-update-routes 才对
+  Get-ChildItem -Recurse -Include *.ts -Path core/src | Select-String -Pattern 'system-update-routes'
+  # 2 前端没引用回滚面板（0 命中）
+  Get-ChildItem -Recurse -Include *.vue,*.ts -Path web/src | Select-String -Pattern 'ReleaseRollbackPanel'
+  # 3 打进单文件的产物里没有这些模块（0 命中）
+  Select-String -Path <esbuild 产物> -Pattern 'system/update|release-manager'
+  # 4 已删除的登录 / 改密 / 深色主题没被带回来（0 命中）
+  Get-ChildItem -Recurse -Include *.ts,*.vue -Path core/src,web/src | Select-String -Pattern 'session-tokens|passwordForm|darkTheme|admin_token'
+  ```
+
+  **第 3 条最容易漏**：源码里留着但没被挂载，和「被打进产物」是两件事。`core/src/services/system-update.ts` 与 `release-manager.ts` 都在仓库里（留着便于以后合并），但只有真正被 `require` 到的模块才会进 esbuild 单文件。这次实测 `main.js` 与 `worker.js` 里都没有 `system/update`、`release-manager`、`build-fingerprint`、`update-plan`，说明确实只有 `packages/session-contract` 被带进去（`runtime-paths` / `worker-manager` 依赖它）。想验这一条得先自己跑一遍 esbuild，别只看 grep 源码。
+
+  还有一条与本次相关的：**上游换构建工具时，群晖脚本未必需要跟着换**。这批把根 `package.json` 的四个构建脚本改成 `turbo run build`，新增 `turbo.json`。但 `synology/build.sh` 调的是 `pnpm build:contract` 和 `pnpm -C web build` / `pnpm -C core build:ts`，前者内部改成 turbo 后行为不变（仍是构建 `packages/session-contract`），后两个根本不经过根脚本，所以**群晖脚本一行都不用改**。判断方法是照旧 diff 两边 `build.sh` 的 pnpm 序列：
+
+  ```sh
+  Select-String -Path fnos/build.sh -Pattern '^\s*pnpm' | Select-Object -ExpandProperty Line
+  Select-String -Path synology/build.sh -Pattern 'pnpm '    | Select-Object -ExpandProperty Line
+  ```
+
+  这次两边序列完全一致（`pnpm install --frozen-lockfile` → web build → `build:contract` → `core build:ts`），所以零改动。反过来如果 `fnos/build.sh` 跟着换了，就要判断群晖是不是也该换——**判据是「群晖有没有用那个被换掉的入口」，不是「上游改了没有」**。
 - **2026-11-22（上游 `eef0d5e`，本仓库 `0f2db49`）**：交集只有 `README.md`，**自动合并成功、零冲突**。这次和 11-16、11-17 那两次「上游一动这段就必撞」不同，值得把区别记下来：上游改的是 README **正文里的产品描述**（把「牧场有今日牧场汇总」改成「农场、牧场各有今日农场 / 今日牧场汇总」），而我们每次动的都在**末尾的「上游同步说明」章节**。两处相距上百行，`git merge` 按 hunk 分开处理，自然不撞。所以上一节那条「上游动这段就必撞」的准确说法是：**只要两边落在同一个 hunk 才必撞，动没动 README 本身不是判据**。
 
   这次要额外做一步：**上游改产品描述时，要读一遍它改的那句话，确认它是否说中了我们这边也同样成立的事实**。本次上游把「今日牧场」扩写成「今日农场 / 今日牧场」并补了「按北京时间 0 点切日」——这两个功能都来自飞牛 fork（`eb97f20`、`8043edf`），已经随 master 一起合进来了，所以那句话对我们同样成立，留着即可。反过来若上游描述的是飞牛独有的行为（如 Docker、端口、fpk 版本号），就必须改写成群晖的对应说法。
@@ -102,13 +138,39 @@ Select-String -Path core/src/core/worker.ts -Pattern 'initialFarmCheckDone|initi
 
 结果为 0 命中或只在注释里出现，才算对。反过来，上游「有意引入」的部分（那次是 `runWithRequestClass` 排队、`canContinue` 网关健康让路、`wakeRanchMarketExchange` 便便到账唤醒）要逐一确认在代码里真实存在。**遇到上游说「我不引入 X」，就把 X 当成一份负面清单来核对，而不是当它不存在。**
 
+**同类但更容易漏的一种：上游做了某个功能，而它明确说不适用于飞牛 / 群晖这种「只读安装目录 + 应用中心升级」的形态**。2026-11-25 的在线更新就是典型——上游 #182/#183 加了一整套 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和前端「版本更新」「历史回滚」卡片，飞牛自己刻意没挂载。合完后要按四个层次各查一遍，**每层都是 0 命中或只剩注释才算对**：
+
+```sh
+# 1 路由没挂：只剩注释里提到 system-update-routes 才对
+Get-ChildItem -Recurse -Include *.ts -Path core/src | Select-String -Pattern 'system-update-routes'
+# 2 前端没引用回滚面板（0 命中）
+Get-ChildItem -Recurse -Include *.vue,*.ts -Path web/src | Select-String -Pattern 'ReleaseRollbackPanel'
+# 3 已删除的登录 / 改密 / 深色主题没被带回来（0 命中）
+Get-ChildItem -Recurse -Include *.ts,*.vue -Path core/src,web/src | Select-String -Pattern 'session-tokens|passwordForm|darkTheme|admin_token'
+# 4 产物里没有这些模块（0 命中；需要先自己跑一遍 esbuild）
+Select-String -Path <main.js> , <worker.js> -Pattern 'system/update|release-manager|build-fingerprint|update-plan'
+```
+
+**第 4 层最容易漏也最容易被误判**：源码里留着文件不等于会被打包。上游这些模块在仓库里是保留的（便于以后合并），但只有真正被 `require` 到的才会进 esbuild 单文件。这次实测 `main.js`（6.12 MB）与 `worker.js`（4.58 MB）里只有 `packages/session-contract`（`runtime-paths` / `worker-manager` 依赖它），没有 `system-update` / `release-manager` / `update-plan`。只看源码 grep 会得出「这些文件存在但没被引用」的半截结论，**要判断它们有没有进产物，必须自己跑一次 esbuild 再 grep 产物**。
+
+同时要确认**该保留的小功能真的还在**。这批里「面板版本检测」是唯一保留的一块（套件升级后旧页面自动刷新），它依赖链比较长，逐项验：
+
+```sh
+Select-String -Path core/src/controllers/admin/system-routes.ts -Pattern 'webBuildId'   # /api/ping 带构建号
+Select-String -Path core/src/controllers/admin/index.ts -Pattern "version.json"        # 后端提供 /version.json
+Select-String -Path web/vite.config.ts -Pattern '__WEB_BUILD_ID__|version.json'        # 构建时生成
+Select-String -Path web/src/stores/app-update.ts -Pattern 'version.json'               # 前端只读本机
+```
+
+第 4 条尤其要看：前端拉的是 `/version.json`（本机后端），不是任何 GitHub 地址。**上游这类「自动刷新」很容易顺手接上「检查新版本」**，一旦接上就等于群晖版在偷偷联网查更新，必须在合并时就掐掉。
+
 **合并**（用 merge，不要 rebase，理由见第 3 节）：
 
 ```sh
 git merge upstream/master
 ```
 
-**验证，四条都要过**。2026-11-24 那次合并（上游 `97014ee`，两个飞牛版本、一个 PR 加五个 fork 分支一批进来）的实测：core 472 通过、web 78 通过、`vue-tsc` 无输出、`web build` 成功。**用例数会随上游增删测试双向变化**：11-15 那次上游下架奶茶 fork 功能，一次删掉 6 个 core 测试文件与 2 个 web 测试文件，core 从 414 掉到 359、web 从 52 掉到 47；11-16 上游加牧场，core 回到 387、web 回到 52；11-17 白天加好友等级与最近访客，core 到 399、web 到 55；11-17 晚上游叠了五条调度/日志分支加三个 PR，core 到 449、web 到 71；11-18 上游只合两个 PR（#147/#148）且没加测试文件，仍是 449/71；11-19 上游 #153 带进 `farm-ripening.test.js`（催熟策略），core 到 453，web 仍 71；11-20 上游四个 PR 只动了 `fnos-timetable.test.js` 的几行断言、没加测试文件，仍是 453/71；11-22「今日农场」带进 4 项 core 测试、日志空间扩到 2 项 web 测试，core 到 457、web 到 73；11-23 带进 `fnos-muge-auto-claim.test.js`、`fnos-overview-cache.test.js` 与 `fnos-overview.test.mjs`，core 到 463、web 到 78；11-24 带进 `fnos-overview-writer.test.js`，core 到 472，web 仍 78。看到数字变化先确认是不是上游增删的，别当成测试挂了或自己改错了。上游自己的变更说明里通常写了它的用例数（`2026.11.24` 记的是 472/78），**合完对一下这两个数**，一致就说明本地没有漏合并的测试改动。
+**验证，四条都要过**。2026-11-25 那次合并（上游 `3e64b41`，三个飞牛版本、两个 PR 加五个 fork 分支一批进来）的实测：core 477 通过、web 78 通过、`vue-tsc` 无输出、`web build` 成功。**用例数会随上游增删测试双向变化**：11-15 那次上游下架奶茶 fork 功能，一次删掉 6 个 core 测试文件与 2 个 web 测试文件，core 从 414 掉到 359、web 从 52 掉到 47；11-16 上游加牧场，core 回到 387、web 回到 52；11-17 白天加好友等级与最近访客，core 到 399、web 到 55；11-17 晚上游叠了五条调度/日志分支加三个 PR，core 到 449、web 到 71；11-18 上游只合两个 PR（#147/#148）且没加测试文件，仍是 449/71；11-19 上游 #153 带进 `farm-ripening.test.js`（催熟策略），core 到 453，web 仍 71；11-20 上游四个 PR 只动了 `fnos-timetable.test.js` 的几行断言、没加测试文件，仍是 453/71；11-22「今日农场」带进 4 项 core 测试、日志空间扩到 2 项 web 测试，core 到 457、web 到 73；11-23 带进 `fnos-muge-auto-claim.test.js`、`fnos-overview-cache.test.js` 与 `fnos-overview.test.mjs`，core 到 463、web 到 78；11-24 带进 `fnos-overview-writer.test.js`，core 到 472，web 仍 78；11-25 带进 `log-module-filter.test.js` 与帮忙生产迁移单测，core 到 477，web 仍 78。看到数字变化先确认是不是上游增删的，别当成测试挂了或自己改错了。上游自己的变更说明里通常写了它的用例数（`2026.11.24.3` 记的是 477/78），**合完对一下这两个数**，一致就说明本地没有漏合并的测试改动。
 
 **还要单独核一遍「默认值」**。上游改默认值时，测试全绿也不代表升级行为没变——2026-11-17 晚那次上游 #145 把 `RANCH_AUTOMATION_DEFAULTS` 里十几个 `false` 全改成 `true`，测试一条都不会响，但用户升级后牧场会开始自己干活。做法是每批合并后 `git diff <合并前基线> HEAD -- '**/DEFAULT*' '**/*defaults*' '**/config/*.ts'` 扫一遍，再判断影响面：
 
@@ -138,7 +200,8 @@ pnpm -C web build
 | `synology/`、`.github/`、`docs/synology-build.md` | 群晖打包链 | **从不**（`git rev-list --count upstream/master -- <路径>` 当前为 0） | 不会冲突，不用检查 |
 | `README.md`（根） | 群晖化：安装步骤、出包、版本号规则、实机验证状态。「上游同步说明」那段每次同步都得重写，写法见第 6 节 | 每次发版都写 | 解法见第 5 节；2026-11-03、2026-11-16、2026-11-17 晚三次合并的冲突都在这里，三次都撞在同一段「上游同步说明」。**上游只要动了这段就必撞**，与这批提交多少无关 |
 | `docs/README.md` | 索引里加了群晖相关行，新增文档时要登记 | 新增专题文档时 | 单行，手工并排 |
-| `web/src/components/Sidebar.vue` | 5 处文案：飞牛字样改群晖、`fpk v…` → `spk v…`、开源地址指本 fork | 会（账号下拉、布局调整） | **按语义找，别按行号**——上游加个类名行号就漂了 |
+| `web/src/components/Sidebar.vue` | 5 处文案：飞牛字样改群晖、`fpk v…` → `spk v…`、开源地址指本 fork | 会（账号下拉、布局调整、未保存编辑保护、重连状态） | **按语义找，别按行号**——上游加个类名行号就漂了。合完 grep `群晖|spk |飞牛|REPO_URL`，判据是「用户可见文案里不能出现飞牛」，注释里可以留 |
+| `.gitignore` | 加了 `synology/out/`、`/runtime/`、`/releases/`、`/packages/*/dist/` | 会（上游加 `.turbo/` 这类构建产物目录） | 两边都在末尾追加时 git 会并排保留，但**注释语义可能归错**（2026-11-25 就出现过：上游的 `.turbo/` 落进了本地「运行时目录」那段注释下面，已拆成独立一条）。合完扫一眼文件尾部，别只看有没有冲突标记 |
 | `fnos/sea/` | 群晖版复用它的 esbuild 打包参数 | 碰过 1 次（SEA 引入） | 一般不冲突；改 `synology/build.sh` 前 diff 一眼 |
 | 三个 `package.json` | 上游自己按日期改版本号 | 每次发版 | 自动合并，取上游值。**注意上游常常只改 `core` / `web` 两个、根的不动**（2026-11-17 晚就是这样），别顺手写「三个都变了」，实读一遍再写 |
 
@@ -161,16 +224,16 @@ git diff --name-only --diff-filter=U    # 只要文件名
 
 ## 6. 合并之后
 
-**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-24 那次（合并提交 `a9055df`）的填法：
+**根 README 的「上游同步说明」每次都要重写**。六个要素缺一个就算没写完，2026-11-25 那次（合并提交 `2f05247`）的填法：
 
 | 要素 | 填什么 |
 | --- | --- |
-| 上游到哪个提交 | `97014ee` |
-| 对应的飞牛版本号 | `2026.11.24`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
-| 本仓库的合并提交号 | `a9055df` |
-| 带进来哪些用户可见变化 | **偷收比全套下架（删功能）**：阈值 / 拒绝申请 / 好友页筛选 / Bark / 自动删好友全部移除，只留「在线期间来偷菜的自动删除」；独立会话宿主与后端接管（`packages/session-contract`，群晖不设 `FARM_SESSION_SOCKET` 故不启用）；牧场好友列表显示可帮生产 / 可偷 / 可清理；首页概览紧凑化 + 农场生涯；概览缓存改由后台写入（`data/fnos-overview-cache/`，15 秒节流） |
-| `core` / `web` 的 `package.json` 是否变 | 版本号**都没变**（根 `20261116`、`core` `20261117`、`web` `20261119`），但根 `package.json` 加了 `build:contract` 脚本、`pnpm-workspace.yaml` 加了 `packages/session-contract`、`pnpm-lock.yaml` 变了——**这条不能再简单回答「变没变」，要分「版本号」和「脚本/工作区」两问** |
-| 验证到哪一步 | 四条命令通过（core 472、web 78、`vue-tsc` 无输出、`web build` 成功），与上游 `2026.11.24` 自述的用例数一致；**没有用真号验证过**，上游也没装 NAS 实测 |
+| 上游到哪个提交 | `3e64b41` |
+| 对应的飞牛版本号 | `2026.11.24.3`（读 `fnos/qq-farm-bot/manifest` 的 `version`；`fnos/飞牛部署与变更说明.md` 抬头那个 `2026.11.1` 是过期的，别抄） |
+| 本仓库的合并提交号 | `2f05247` |
+| 带进来哪些用户可见变化 | **本 fork「好友牧场：帮忙生产」删除（删功能，自动迁移到上游开关）**；通知设置改多渠道 + 三类通知开关（#188）；自家作物成熟即收（#185，小号留菜仍优先）；牧场好友一键帮忙生产（#185/#187）；好友名单复查与缓存（#186）；面板版本检测（#182，套件升级后旧页面自动刷新）；在线更新 / 历史回滚在群晖版一律 404 且界面不显示 |
+| `core` / `web` 的 `package.json` 是否变 | **版本号只有 `web` 变**（`20261119` → `20261124`），根仍 `20261116`、`core` 仍 `20261117`；但脚本变了：根四个构建脚本换 turbo + 加 `turbo@2.11.13`，`core` 加 `prepare:dist` / `host-fingerprint`，`core` 与 `web` 都加了 `prepare:dist`，`pnpm-lock.yaml` 随之变（`pnpm install` 这次真装了 `turbo`） |
+| 验证到哪一步 | 四条命令通过（core 477、web 78、`vue-tsc` 无输出、`web build` 成功），与上游 `2026.11.24.3` 自述的用例数一致；另补跑群晖链路（turbo `build:contract`、core `build:ts`、esbuild 双产物 + `node --check`、无 `QQ_FARM_NO_TCP` 赋值、无 `.node`、前端挂根路径）；**没有用真号验证过**，上游也没装 NAS 实测；Linux/DSM 出包未跑 |
 
 这次暴露了一个新要素，以后要单独核：**上游新增 workspace 包 / 新构建前置时，群晖打包链要跟着补**（详见第 2 节末）。六要素表格里「package.json 是否变」这一栏，从此要拆成两问回答——版本号变没变是一回事，脚本和工作区配置变没变是另一回事，后者才决定群晖能不能出包。
 
@@ -179,6 +242,10 @@ git diff --name-only --diff-filter=U    # 只要文件名
 ```sh
 git diff <合并前基线> HEAD -- '**/*defaults*' core/src/config core/src/types/config.ts core/src/models/store/account-config.ts
 ```
+
+**上游新增「默认关」的自动化开关时，也要一样当默认值改动写**。2026-11-25 的 `ranch_friend_produce`（自动帮忙生产）默认 `false`，测试全绿、老用户不会被动触发，但它替代的是本 fork 自己那个同义开关，所以**必须交代旧开关去哪了、旧配置会不会被静默丢弃**。这次的模式值得照抄：不是直接删字段，而是在 `normalizeAccountConfig` 里调一个专门的迁移函数（`migrateFnosHelpProduce`），条件是「旧开关为 true 且上游开关未设置」→ 上游开关设为开；上游开关已显式设置（含 false）则以上游为准；旧字段由 `normalizeFnosRanch` 在下次保存时丢弃。写成纯函数 + 单测（含磁盘旧配置读回、保存后旧字段消失）比只测 `normalizeAccountConfig` 更可靠。
+
+**默认值的另一面：`[fnos-fork]` 覆盖默认值的注释要保持可查**。`ranch_friend_mosquito` 仍是「默认关」并带 `[fnos-fork]` 注释说明是用户 2026-11-16 的要求——上游 #145 把它改成默认开，我们改回来了。每次同步扫默认值文件时，看到 `[fnos-fork]` 标记就要确认它还在、注释里的日期和原因没被上游冲掉。
 
 **「默认开 + 条件豁免」这种组合一定要单独写清**：只说「默认开」会让关过补栏和升级的用户以为自己的保守设置被打乱，只说「按旧设置豁免」又会让大多数人不知道新功能已生效。11-20 的 `ranch_activate_shed` 就是照着「默认开，但如果你原来同时关了补栏和金券升级、且没设置过这个新开关，就保留手动解锁」来写的。
 
@@ -198,7 +265,7 @@ git diff <合并前基线> HEAD -- '**/*defaults*' core/src/config core/src/type
 其余几项：
 
 - **版本号与上游脱钩**：`synology/build.sh` 自己按「构建日期 + 当天第几个包」选号，跟上游 manifest 的 `version` 没关系。spk 版本必须是 `YYYY.MM.DD-N`（月日补零，`N` 为当天序号、每天从 `1` 重新算）——DSM 把它当「主版本-feature build」两段比较，`2026.11.4` 这种没后缀的会和飞牛包混在一起。
-- **上游带新依赖**（`pnpm-lock.yaml` 变了）：本机先 `pnpm install --frozen-lockfile`；CI 的依赖缓存 key 走 `hashFiles('pnpm-lock.yaml')`，会自动换新，不用手动清。**但 lock 变了不等于依赖变了**——2026-11-24 那次 `pnpm-lock.yaml` 变是因为新增了 workspace 包 `packages/session-contract`，`pnpm install` 只回一句「Already up to date」。真正的坑不在装依赖，而在**构建顺序**：core 依赖该包的 `dist/`，而群晖 `synology/build.sh` 不会自动跟上飞牛新增的 `pnpm build:contract`，漏了就直接 `TS2307` 构建失败（详见第 2 节末）。所以看到 lock 变动时，除了 `pnpm install`，还要 diff 一下 `pnpm-workspace.yaml` 和两边 `build.sh`。
+- **上游带新依赖**（`pnpm-lock.yaml` 变了）：本机先 `pnpm install --frozen-lockfile`；CI 的依赖缓存 key 走 `hashFiles('pnpm-lock.yaml')`，会自动换新，不用手动清。**但 lock 变了不等于依赖变了**——2026-11-24 那次 `pnpm-lock.yaml` 变是因为新增了 workspace 包 `packages/session-contract`，`pnpm install` 只回一句「Already up to date」。2026-11-25 那次反过来，lock 变是因为根 `devDependencies` 真的加了 `turbo@2.11.13`，`pnpm install` 输出了 `+ turbo`。两种都见过，**别凭 lock 变就断言「装了新依赖」或「什么都没装」，看 install 的实际输出**。真正的坑不在装依赖，而在**构建顺序**：core 依赖该包的 `dist/`，而群晖 `synology/build.sh` 不会自动跟上飞牛新增的 `pnpm build:contract`，漏了就直接 `TS2307` 构建失败（详见第 2 节末）。所以看到 lock 变动时，除了 `pnpm install`，还要 diff 一下 `pnpm-workspace.yaml` 和两边 `build.sh`。
 - **出包只能在 Linux**：Windows 上只能做到构建那步，`synology/build.sh` 有系统闸。走 CI（`.github/workflows/build-spk.yml`，手动触发时 `spk_version` 留空则按「上海日期-当天第几个包」自动选号，`publish_release` 决定是否连带发 Release）或在 NAS / Linux 机上跑脚本。
 - **armv8 仍是未实机验证**：上游改动不会因为 CI 变绿就变成「armv8 已支持」。
 - **提交和推送是两次授权**：合并完先报状态，别自己 `git push`。
