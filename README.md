@@ -1,30 +1,61 @@
 # qq-farm-bot-Synology
 
-QQ 农场助手的 **群晖 Synology DSM 原生套件（`.spk`）** 版本。
+**QQ 农场助手**的群晖 Synology DSM 原生套件（`.spk`）版本。
+
+**一句话说清**：这是个**能装在群晖套件中心里的 QQ 农场挂机助手**，装完打开 `http://<群晖IP>:3007/` 扫码登录即可。不是 Docker，不依赖群晖的 Node.js 套件。
 
 > [!IMPORTANT]
 > **本仓库的群晖适配 100% 由 AI 完成，零人工编码。**
+>
 > `synology/` 打包链、DSM 生命周期钩子、前端群晖化改动、本 README 与 `docs/` 下的文档，全部由 AI 编写并在真实群晖（SA6400 / DSM 7.2.2）上安装、运行、原地升级验证过。文中每一条「实测」都对应一次真实执行与取证，不是推断或复制粘贴。人只负责两件事：提需求、拍板。
+>
 > 农场核心功能（协议、活动、逻辑）不在此范围内，属于下面血缘里的上游项目。
 
 > [!NOTE]
-> **致谢与下架承诺**：本仓库能跑起来，靠的是上游两代作者和贡献者的付出——群晖适配只是把同一套东西换个打包形态，不对上游代码主张任何权利，也不作商业用途。若原作者认为构成侵权，或希望它不再存在，请到 [仓库 Issues](https://github.com/Vjjvj/qq-farm-bot-Synology/issues) 留言说明，看到即删除整个仓库，不做争辩、不改名保留。详见文末「许可、致谢与下架」。
+> **致谢与下架承诺**：本仓库能跑起来，靠的是上游两代作者和贡献者的付出——群晖适配只是把同一套东西换个打包形态，不对上游代码主张任何权利，也不作商业用途。若原作者认为构成侵权，或希望它不再存在，请到 [仓库 Issues](https://github.com/Vjjvj/qq-farm-bot-Synology/issues) 留言说明，看到即删除整个仓库，不做争辩、不改名保留。详见文末「[许可、致谢与下架](#许可致谢与下架)」。
+
+## 目录
+
+- [群晖版是什么样的](#群晖版是什么样的) — 它和 Docker 版、飞牛版的区别
+- [⚠️ 装完先看这段](#️-装完先看这段) — **安全边界，务必读**
+- [安装](#安装) — 三步装好，以及扫码登录要另配什么
+- [自行构建](#自行构建) — 不想用现成包就自己打
+- [运行期位置](#运行期位置) — 出问题该去哪个目录看
+- [额外功能](#额外功能) — 这个 fork 比上游多了什么
+- [上游同步说明](#上游同步说明) — 每次跟随上游更新了什么、升级前要知道什么
+- [项目文档](#项目文档) / [许可、致谢与下架](#许可致谢与下架)
+
+## 血缘
 
 本项目 fork 自 [Maksim-venus/qq-farm-bot-fnos](https://github.com/Maksim-venus/qq-farm-bot-fnos)（飞牛 fnOS 原生版），它又 fork 自 [liyangpengs/qq-farm-bot](https://github.com/liyangpengs/qq-farm-bot) 原始项目。QQ 农场助手的核心功能、下面「额外功能」里列的所有特性都来自这两层上游，感谢原作者及贡献者；本仓库只在此之上做群晖打包与适配。
 
-**这个 fork 只出群晖包，不再产出飞牛 FPK。** 与上游共用且被本仓库改过的文件只有两个：`web/src/components/Sidebar.vue`（兜底文案「飞牛用户/飞牛管理员/已通过飞牛登录」改为群晖字样，版本前缀 `fpk` → `spk`）和 `.gitignore`（加了 `synology/out/` 与上游在线更新产生的运行时目录）。要出飞牛包请回上游，别用这个分支——那样侧栏会显示群晖字样。
+> **这个 fork 只出群晖包，不再产出飞牛 FPK。** 要出飞牛包请回上游，别用这个分支——那样侧栏会显示群晖字样。与上游共用且被本仓库改过的文件只有两个：
+>
+> | 文件 | 改了什么 |
+> | --- | --- |
+> | `web/src/components/Sidebar.vue` | 兜底文案「飞牛用户 / 飞牛管理员 / 已通过飞牛登录」改为群晖字样；版本前缀 `fpk` → `spk` |
+> | `.gitignore` | 加了 `synology/out/` 与上游在线更新产生的运行时目录 |
 
 ## 群晖版是什么样的
 
-- **DSM 原生套件**，不是 Docker。由套件中心统一安装、启停、升级（`INFO` 里 `ctl_stop="yes"`，重装/升级会走钩子）。开机自启走 DSM 标准链路：套件中心会为本包生成 `pkgctl-qq-farm-bot.service`（实测 `enabled`，`WantedBy=syno-low-priority-packages.target`，`ExecStart` 调 `synopkgctl start`，与手动启动是同一个 `start-stop-status`）；这条链在机上取证过，但没做过真机重启验证。
-- **自带 Node.js 22 官方二进制**，不依赖套件中心的「Node.js」套件；后端是 esbuild 打出的两个纯 JS 文件（`bin/main.js`、`bin/worker.js`）。
-- **以普通包账号运行**：`conf/privilege` 只声明 `defaults.run-as="package"` + `username`/`groupname = sc-qq-farm-bot`，不声明任何 root 权限。DSM 7.2 会**直接拒绝**声明 root 的第三方包，连解包都不做——这是装机实测踩到的第一道墙，别照着官方套件文档加 `ctrl-script`。
-- **监听 TCP，默认放行局域网**：`0.0.0.0:3007`，浏览器直接开 `http://<群晖 IP>:3007/`。不走 `/webman/3rdparty/` 网关前缀（那个前缀只伺服静态文件，不是反向代理）。
-- **移除了登录 / 改密模块**：应用内没有管理员账号密码，谁能连上这个端口谁就是管理员。
+| 特性 | 说明 |
+| --- | --- |
+| **DSM 原生套件** | 不是 Docker。由套件中心统一安装、启停、升级（`INFO` 里 `ctl_stop="yes"`，重装/升级会走钩子） |
+| **自带 Node.js 22** | 随包附官方二进制，**不依赖**套件中心的「Node.js」套件；后端是 esbuild 打出的两个纯 JS 文件（`bin/main.js`、`bin/worker.js`） |
+| **普通包账号运行** | `conf/privilege` 只声明 `defaults.run-as="package"` + `username`/`groupname = sc-qq-farm-bot`，**不声明任何 root 权限** |
+| **监听 TCP** | 默认 `0.0.0.0:3007`，浏览器直接开 `http://<群晖 IP>:3007/`。不走 `/webman/3rdparty/` 网关前缀（那个前缀只伺服静态文件，不是反向代理） |
+| **没有登录页** | 移除了登录 / 改密模块：应用内没有管理员账号密码，**谁能连上这个端口谁就是管理员** |
+
+关于开机自启：走 DSM 标准链路——套件中心会为本包生成 `pkgctl-qq-farm-bot.service`（实测 `enabled`，`WantedBy=syno-low-priority-packages.target`，`ExecStart` 调 `synopkgctl start`，与手动启动是同一个 `start-stop-status`）；这条链在机上取证过，但没做过真机重启验证。
+
+关于第一道墙：DSM 7.2 会**直接拒绝**声明 root 的第三方包，连解包都不做——这是装机实测踩到的，别照着官方套件文档加 `ctrl-script`。
 
 ## ⚠️ 装完先看这段
 
-默认监听 `0.0.0.0:3007` 意味着**同网段任何设备打开这个端口就能控制你挂在上面的 QQ 账号**（应用没有登录页，也没有二次校验）。确认内网可信再用；想收紧改 `/var/packages/qq-farm-bot/var/settings.conf`（这个路径与套件装在哪个卷无关，`var` 是 DSM 建的软链，本机指向 `/volume1/@appdata/qq-farm-bot`，装在其他卷就指向对应卷）：
+> [!WARNING]
+> 默认监听 `0.0.0.0:3007` 意味着**同网段任何设备打开这个端口就能控制你挂在上面的 QQ 账号**（应用没有登录页，也没有二次校验）。确认内网可信再用；**不要把 3007 端口直接映射到公网。**
+
+想收紧就改 `/var/packages/qq-farm-bot/var/settings.conf`。这个路径与套件装在哪个卷无关（`var` 是 DSM 建的软链，本机指向 `/volume1/@appdata/qq-farm-bot`，装在其他卷就指向对应卷）：
 
 ```ini
 ADMIN_HOST="127.0.0.1"   # 只本机可达，之后靠 SSH 端口转发或反代/隧道访问
@@ -32,53 +63,109 @@ ADMIN_PORT="3007"
 LOG_LEVEL="info"         # error / warn / info / debug
 ```
 
-改完在套件中心重启套件生效（`settings.conf` 由 `scripts/start-stop-status` 每次启动时 source）。如果要出公网，务必把 `ADMIN_HOST` 改回 `127.0.0.1`，认证放在反代/隧道那一层，并清掉转发过来的 `X-Trim-*` 请求头——**没有这些头时应用把访问者当作管理员**，客户端自己伪造 `X-Trim-Isadmin: false` 反而会把自己挡在门外。不要把 3007 端口直接映射到公网。
+改完**在套件中心重启套件**生效（`settings.conf` 由 `scripts/start-stop-status` 每次启动时 source）。
 
-`postinst` 只在 `settings.conf` **不存在时**才写默认值，所以升级不会覆盖你改过的配置。升级过程中 DSM 会依次跑 `stop → preupgrade → preuninst → postuninst → preinst → postinst → postupgrade → start`（`-4 → -5 → -6` 两次原地升级实测，八步全 `code:0`，`settings.conf` 与 `data/` 的 md5 前后一致）——注意**卸载钩子在升级里也会被执行**，`postuninst` 删数据等于升级时清库。
+出公网的话，务必把 `ADMIN_HOST` 改回 `127.0.0.1`，认证放在反代/隧道那一层，并**清掉转发过来的 `X-Trim-*` 请求头**——没有这些头时应用把访问者当作管理员，客户端自己伪造 `X-Trim-Isadmin: false` 反而会把自己挡在门外。
+
+### 升级与卸载的两个坑
+
+- **升级不会覆盖你的配置**：`postinst` 只在 `settings.conf` **不存在时**才写默认值。
+- **卸载钩子在升级里也会被执行**：升级过程中 DSM 依次跑 `stop → preupgrade → preuninst → postuninst → preinst → postinst → postupgrade → start`（`-4 → -5 → -6` 两次原地升级实测，八步全 `code:0`，`settings.conf` 与 `data/` 的 md5 前后一致）。因此 `postuninst` 里若删数据，等于**升级时清库**。
 
 ## 安装
 
-1. 从 Releases 取对应架构的 `qq-farm-bot_<版本>_<架构>.spk`（下载下来装之前、传进群晖之后各核对一次同目录的 `.sha256`）；不想用现成产物就按下节自行构建。版本号是构建日期 `YYYY.MM.DD-N`，例如 `2026.11.03-4`——DSM 把它当「主版本-feature build」两段比较，同一天再出一版就把 `-N` 递增，套件中心能直接覆盖升级。
-2. 套件中心 → 「手动安装」，选择该 `.spk`，按向导点到底（第三方包没有 Synology 签名，向导里的来源确认文案随 DSM 小版本变化，本机 7.2.2-72806 上正常走完，安装期日志落在 `/var/log/synopkg.log`）。
-3. 安装完自动启动。浏览器打开 `http://<群晖 IP>:3007/` 就是管理面板。
+### 三步装好
 
-**扫码登录要自己接原始项目那套前置**：本套件只把后端和面板跑起来，不含 QQ 登录服务。面板「设置 → 系统设置 → 登录设置」里 `QQ扫码登录` 默认关闭，`NapCat接口地址` / `NapCat接口签名` 留空时保存就报「开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名」。要先自行部署 `qq-miniapp-auth` 服务，怎么部署、两项怎么填看原始项目的说明（飞牛版那层文档里也没这段），参考链接：<https://github.com/liyangpengs/qq-farm-bot>。本仓库不重复、也不提供任何登录服务。
+1. **下载**：从 [Releases](https://github.com/Vjjvj/qq-farm-bot-Synology/releases) 取对应架构的 `qq-farm-bot_<版本>_<架构>.spk`，下载后、传进群晖后**各核对一次**同目录的 `.sha256`。版本号格式是 `YYYY.MM.DD-N`（构建日期 + 当天第几个包），例如 `2026.11.03-4`；DSM 把它当「主版本-feature build」两段比较，同一天再出一版就把 `-N` 递增，套件中心能直接覆盖升级。
+2. **安装**：套件中心 → 「手动安装」，选择该 `.spk`，按向导点到底。第三方包没有 Synology 签名，向导里的来源确认文案随 DSM 小版本变化（本机 7.2.2-72806 上正常走完），安装期日志落在 `/var/log/synopkg.log`。
+3. **打开**：安装完自动启动，浏览器打开 `http://<群晖 IP>:3007/` 就是管理面板。
 
-架构选 `x86_64`（含 SA/DS 的 Intel-AMD 机型）或 `armv8`（rtd1296 / rtd1619 / armada37xx）。**装前确认 glibc**：Node 22 需要 ≥ 2.28，在群晖上跑 `echo x | /lib/libc.so.6 | head -1`（DSM 的 `/usr/bin/ldd --version` 没有任何输出，别看它）。`x86_64` 包已在 DSM 7.2.2-72806 Update 8 + SA6400（glibc 2.36；这台是 AMD EPYC 7002，`uname -m` 就是 `x86_64`，别被 Synology 大多用 ARM 的印象带偏）实机装成功并跑起任务，本地 `synology/build.sh` 出的包和 GitHub Actions 出的包都装过；`armv8` 只跑到 CI 打包与结构自检，没在任何 armv8 机型上装过——**CI 绿不等于装机通过**。
+不想用现成产物就按[下一节](#自行构建)自己打。
 
-卸载：`/var/packages/qq-farm-bot/var/`（数据目录，本机即 `/volume1/@appdata/qq-farm-bot`）里的账号、登录态和日志**实测在卸载后仍然保留**（连装带卸三个版本来回，`data/logs/` 里最早的日志还在）。但套件中心的卸载弹窗若勾选了删除套件数据则会清空，动手前自己备份这个目录。
+### 选哪个架构
 
-**重启要重新扫码**：套件每次重启——覆盖升级、改 `settings.conf` 后重启、重启 NAS——之后，已保存的 QQ 登录 Code 都连不上（网关在 WebSocket 握手阶段直接回 400，实测 13 分钟后重试依旧），必须在面板里逐个账号重新扫码。应用没有自动刷新 Code 的能力，日志里「等待 Helper 刷新 Code」那句只是文案。所以别在挂机时段升级。
+| 架构 | 适用机型 | 验证状态 |
+| --- | --- | --- |
+| `x86_64` | SA / DS 的 Intel-AMD 机型 | **已实机验证**：DSM 7.2.2-72806 Update 8 + SA6400（glibc 2.36）装成功并跑起任务，本地脚本出的包和 GitHub Actions 出的包都装过 |
+| `armv8` | rtd1296 / rtd1619 / armada37xx | 只跑到 CI 打包与结构自检，**没在任何 armv8 机型上装过——CI 绿不等于装机通过** |
+
+**装前确认 glibc**：Node 22 需要 ≥ 2.28。在群晖上跑：
+
+```sh
+echo x | /lib/libc.so.6 | head -1
+```
+
+DSM 的 `/usr/bin/ldd --version` 没有任何输出，别看它。
+
+> 小提示：这台验证机是 AMD EPYC 7002，`uname -m` 就是 `x86_64`——别被「Synology 大多用 ARM」的印象带偏，先查自己的 CPU。
+
+### 扫码登录要自己接前置服务
+
+**本套件只把后端和面板跑起来，不含 QQ 登录服务。**
+
+面板「设置 → 系统设置 → 登录设置」里 `QQ扫码登录` 默认关闭；`NapCat接口地址` / `NapCat接口签名` 留空时保存会报「开启 QQ 扫码登录前，请配置 NapCat 接口地址和接口签名」。
+
+要先自行部署 `qq-miniapp-auth` 服务。怎么部署、两项怎么填看原始项目的说明（飞牛版那层文档里也没这段）：<https://github.com/liyangpengs/qq-farm-bot>。本仓库不重复、也不提供任何登录服务。
+
+### 卸载与重装
+
+`/var/packages/qq-farm-bot/var/`（数据目录，本机即 `/volume1/@appdata/qq-farm-bot`）里的账号、登录态和日志**实测在卸载后仍然保留**（连装带卸三个版本来回，`data/logs/` 里最早的日志还在）。但套件中心的卸载弹窗若勾选了删除套件数据则会清空，**动手前自己备份这个目录**。
+
+> [!CAUTION]
+> **重启要重新扫码。** 套件每次重启——覆盖升级、改 `settings.conf` 后重启、重启 NAS——之后，已保存的 QQ 登录 Code 都连不上（网关在 WebSocket 握手阶段直接回 400，实测 13 分钟后重试依旧），必须在面板里逐个账号重新扫码。应用没有自动刷新 Code 的能力，日志里「等待 Helper 刷新 Code」那句只是文案。**所以别在挂机时段升级。**
 
 ## 自行构建
 
-**只能在 Linux 上构建**（`.spk` 外层是不压缩的 tar，内含带可执行位的 `node`；在 Windows/Git Bash 打包会丢权限，装到 DSM 上起不来）。依赖：GNU tar、Node.js 20+、pnpm 10、curl。
+> [!IMPORTANT]
+> **只能在 Linux 上构建。** `.spk` 外层是不压缩的 tar，内含带可执行位的 `node`；在 Windows / Git Bash 打包会丢权限，装到 DSM 上起不来。
+>
+> 依赖：GNU tar、Node.js 20+、pnpm 10、curl。
+
+### 常用命令
 
 ```sh
 pnpm install
+
 synology/build.sh                              # x86_64，版本号取「当天日期-当天第几个包」
 SPK_ARCH=armv8 synology/build.sh               # armv8
 SPK_VERSION=2026.11.17-3 synology/build.sh     # 指定版本号（不低于已发布版本）
 VERSION_ONLY=1 synology/build.sh               # 只看自动选出的版本号，不构建
 ```
 
-版本号形如 `2026.11.17-1`：日期 + **当天第几个包**，每天从 `1` 重新算，第二天出包就是 `2026.11.18-1`。脚本按已发布的 `spk-*` tag 自动选号，跨天归零不会让 DSM 误判成降级。
+**版本号规则**：形如 `2026.11.17-1`，即「日期 + 当天第几个包」，每天从 `1` 重新算（第二天出包就是 `2026.11.18-1`）。脚本按已发布的 `spk-*` tag 自动选号，跨天归零不会让 DSM 误判成降级。
 
-产物在 `synology/out/qq-farm-bot_<版本>_<架构>.spk`（+ `.sha256`）。可覆盖的环境变量：`SPK_ARCH`、`SPK_VERSION`、`ALLOW_NOT_NEWER`、`VERSION_ONLY`、`RELEASE_REMOTE`、`NODE_VERSION`、`NODE_CACHE_DIR`（复用已下载的 Node dist，跳过外网拉取）、`SKIP_INSTALL=1`（依赖已装好时跳过 `pnpm install`）、`MAINTAINER`（写进 `INFO` 的发布商名，仓库没有 git 配置时会是 `unknown`）。
+**产物**：`synology/out/qq-farm-bot_<版本>_<架构>.spk`（+ `.sha256`）。
 
-构建脚本里两个不显然的约束：不得把 `QQ_FARM_NO_TCP=1` 编进产物（脚本会 grep 拦住，否则群晖版永远拒绝监听 TCP）；后端依赖必须全是纯 JS，出现 `.node` 原生模块就得随包提供对应架构的预编译文件（同样会拦）。
+### 可覆盖的环境变量
 
-完整教程——怎么在群晖本机搭构建用的 Node/pnpm、DSM 没有 sftp 时怎么传代码、出包后不装就能验完的自检清单、失败对照表——见 [`docs/synology-build.md`](docs/synology-build.md)。
+| 变量 | 作用 |
+| --- | --- |
+| `SPK_ARCH` | 目标架构（`x86_64` / `armv8`） |
+| `SPK_VERSION` | 指定版本号，不能低于已发布版本 |
+| `ALLOW_NOT_NEWER` | 跳过「必须比已发布版本新」的检查（本地测试用） |
+| `VERSION_ONLY` | 只输出将使用的版本号，不构建 |
+| `RELEASE_REMOTE` | 查询 `spk-*` tag 的远端，默认 `origin` |
+| `NODE_VERSION` | 随包 Node 的版本 |
+| `NODE_CACHE_DIR` | 复用已下载的 Node dist，跳过外网拉取 |
+| `SKIP_INSTALL=1` | 依赖已装好时跳过 `pnpm install` |
+| `MAINTAINER` | 写进 `INFO` 的发布商名（仓库没有 git 配置时会是 `unknown`） |
+
+### 构建脚本里两个不显然的约束
+
+- **不得把 `QQ_FARM_NO_TCP=1` 编进产物**——脚本会 grep 拦住，否则群晖版永远拒绝监听 TCP。
+- **后端依赖必须全是纯 JS**——出现 `.node` 原生模块就得随包提供对应架构的预编译文件（同样会拦）。
+
+完整教程（怎么在群晖本机搭构建用的 Node/pnpm、DSM 没有 sftp 时怎么传代码、出包后不装就能验完的自检清单、失败对照表）见 [`docs/synology-build.md`](docs/synology-build.md)。
 
 ## 运行期位置
 
 | 路径 | 内容 |
-|---|---|
+| --- | --- |
 | `/var/packages/qq-farm-bot/` | `INFO`、`conf/privilege`、`scripts/`（DSM 用的钩子） |
 | `/var/packages/qq-farm-bot/target` → `/volume1/@appstore/qq-farm-bot` | `node/bin/node`、`server/bin/*.js`、`server/resources/`、`server/web/dist` |
 | `/var/packages/qq-farm-bot/var` → `/volume1/@appdata/qq-farm-bot` | `settings.conf`、`data/`（账号、登录态、日志）、`qq-farm-bot.log`、`qq-farm-bot.pid` |
 
-排查命令用绝对路径：非交互 SSH 里 `synopkg` 不在 PATH 上，得写 `/usr/syno/bin/synopkg status qq-farm-bot`。
+> **排查时用绝对路径**：非交互 SSH 里 `synopkg` 不在 PATH 上，得写 `/usr/syno/bin/synopkg status qq-farm-bot`。
 
 ## 额外功能
 
@@ -141,47 +228,111 @@ VERSION_ONLY=1 synology/build.sh               # 只看自动选出的版本号�
 
 ## 上游同步说明
 
-本版已合并上游至 `3e64b41`（飞牛版 `2026.11.24.3`，本仓库合并提交 `2f05247`）。30 个提交、89 个文件，跨三个飞牛版本（`2026.11.24.1` / `.2` / `.3`）、两个上游 PR（#182、#183）加一批飞牛 fork 分支。
+本版已合并上游至 `3e64b41`（飞牛版 `2026.11.24.3`，本仓库合并提交 `2f05247`）：30 个提交、89 个文件，跨三个飞牛版本（`2026.11.24.1` / `.2` / `.3`）、两个上游 PR（**#182**、**#183**）加一批飞牛 fork 分支。
 
-**⚠️ 升级会少一个功能：本 fork 的「好友牧场：帮忙生产」被删除**（飞牛 fork，2026-11-25）。牧场设置页「飞牛增强」卡片里原来那个开关连同说明整块消失，统一改用上游的「自动控制 → 自动帮忙生产」。**旧配置会自动迁移**：以前开着 fork 那个开关、而上游开关从没设过的账号，读配置时会自动把上游开关设为开；已明确设过上游开关（含关掉）的以上游为准，不会被改回去。旧的 fork 字段在下次保存时从配置文件清掉。这样做的原因是上游 #185/#187 自己实现了帮忙生产（还带「先偷、再帮生产、再清理」的巡查顺序），两套并存会重复发请求。
+### ⚠️ 升级前要知道：会少一个功能
 
-**通知设置改成了多渠道**（PR #188）：原来「下线提醒」只有一个渠道，现在是渠道列表，可以同时启用多个、逐个配置逐个测试；新增三类通知开关（账号下线 / 神秘商人到货 / 自动购买），默认都开。**老的单渠道配置读取时自动迁移成一个已启用的渠道**，不用重新填。Bark 的「重要警告」开关跟着 Bark 渠道出现，随「保存通知设置」保存。
+**本 fork 的「好友牧场：帮忙生产」被删除**（飞牛 fork，2026-11-25）。牧场设置页「飞牛增强」卡片里原来那个开关连同说明整块消失，统一改用上游的「自动控制 → 自动帮忙生产」。
 
-**自家作物成熟即收**（PR #185）：农场循环记住每块自家作物的成熟时刻，到点就唤醒巡田；收到自家土地推送里已成熟的地直接收获（只收那几块），不必等整轮。**小号的「先留给大号偷」仍然优先生效**——开着它的小号不走这条推送直收，照旧等大号偷过或超时才收，手动收获和一键全收不受限制。
+**旧配置会自动迁移**，不用手动改：
 
-**好友牧场一键帮忙生产**（PR #185/#187）：牧场好友列表每人有「帮忙生产」按钮，自动控制新增「自动帮忙生产」（默认关），打开后并入牧场好友巡查。
+| 你的旧配置 | 升级后 |
+| --- | --- |
+| fork 开关开着，上游开关**从没设过** | 自动把上游开关设为**开** |
+| 上游开关已明确设置过（含**关掉**） | 以上游为准，**不会被改回去** |
+| 旧的 fork 字段 | 下次保存时从配置文件清掉 |
 
-**好友名单复查与缓存**（PR #186）：部分回包的好友列表保留已确认详情，缺摘要的好友 30 分钟内不重复扫描，断线时重置。
+这样做的原因是上游 #185/#187 自己实现了帮忙生产（还带「先偷、再帮生产、再清理」的巡查顺序），两套并存会重复发请求。
 
-**面板版本检测**（PR #182，群晖版只保留这一小块）：前端构建时生成 `version.json`（`buildId`），后端 `/version.json` 与 `/api/ping` 的 `webBuildId` 都带上，Socket.IO `ready` 也带。**作用是套件升级后浏览器里的旧页面会自动刷新到新版**（有未保存编辑时显示「新版已就绪，点击刷新」）。只比较本机后端的前端构建号，不访问 GitHub、不检查上游版本。
+### 这批带进来的变化
 
-**在线更新与历史回滚在群晖版一律不可用**（PR #182/#183）：上游新增了 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和设置页的「版本更新」「历史回滚」卡片。**这些接口在群晖版没有挂载，一律 404，界面也不显示**。
+| 来源 | 变化 |
+| --- | --- |
+| PR #188 | **通知设置改成多渠道**：原来「下线提醒」只有一个渠道，现在是渠道列表，可同时启用多个、逐个配置逐个测试；新增三类通知开关（账号下线 / 神秘商人到货 / 自动购买），默认都开。**老的单渠道配置读取时自动迁移成一个已启用的渠道**。Bark 的「重要警告」开关跟着 Bark 渠道出现 |
+| PR #185 | **自家作物成熟即收**：农场循环记住每块自家作物的成熟时刻，到点就唤醒巡田；收到自家土地推送里已成熟的地直接收获（只收那几块），不必等整轮。**小号的「先留给大号偷」仍然优先生效**——开着它的小号不走这条推送直收，照旧等大号偷过或超时才收；手动收获和一键全收不受限制 |
+| PR #185 / #187 | **好友牧场一键帮忙生产**：牧场好友列表每人有「帮忙生产」按钮；自动控制新增「自动帮忙生产」（默认关），打开后并入牧场好友巡查 |
+| PR #186 | **好友名单复查与缓存**：部分回包的好友列表保留已确认详情，缺摘要的好友 30 分钟内不重复扫描，断线时重置 |
+| PR #182 | **面板版本检测**（群晖版只保留这一小块，见下） |
 
-原因不是「目录只读」这么笼统——真正的原因是上游那套更新**要的东西群晖包里一样都没有**：它靠 `git fetch` / `git pull` 拉源码，再调 `tools/service-control.mjs` 跑 `pnpm install` + `turbo run build` 重新构建前后端，最后写进 `releases/` 切换。而群晖包是「esbuild 单文件 + 预构建的 `web/dist` + 官方 node 二进制」，**既没有 `.git`、没有源码、也没有 `node_modules` 和 pnpm**，只有运行期产物。所以哪怕目录可写，这套流程也无从执行。
+### 面板版本检测：群晖版保留的唯一一块
 
-上游自己对此有现成判定，群晖版会落在 `mode: 'unknown'`：`system-update.ts` 的 `detectEnv` 按 `isPackaged` → docker → 找 `.git` → git 可执行 的顺序判断，群晖版因为是用普通 `node` 跑 `main.js`（不是 `pkg`/SEA 单文件，`isPackaged` 与 `isSea` 都是 false），前两支都不触发；接着在 `appRoot`（`/var/packages/qq-farm-bot/target`）的上两级找 `.git`，`/var/packages/qq-farm-bot` 和 `/var` 下都没有，于是 `repoRoot` 为 null，`unsupportedReason` 是「未找到 Git 仓库根目录（.git），当前运行方式不支持检查更新」。**这层判定是额外的安全网**：即使哪天误挂了路由，也不会真去拉代码。
+前端构建时生成 `version.json`（`buildId`），后端 `/version.json` 与 `/api/ping` 的 `webBuildId` 都带上，Socket.IO `ready` 也带。
 
-其次才是治理层面的理由：群晖的版本管理归套件中心，升级要留 `INFO` 的 version 记录、走 `preupgrade` / `postupgrade` 钩子、能回滚到上一个 `.spk`。让面板自己换掉 `server/` 下的文件会绕开这套机制，套件中心显示的版本就和实际跑的对不上，卸载/升级钩子也会按旧版本假设去动新文件。
+**作用是套件升级后浏览器里的旧页面会自动刷新到新版**（有未保存编辑时显示「新版已就绪，点击刷新」）。它只比较本机后端的前端构建号，**不访问 GitHub、不检查上游版本**。
 
-相关源码文件（`system-update.ts`、`release-manager.ts`、`system-update-routes.ts`、`ReleaseRollbackPanel.vue`）留在仓库里便于以后合并，但不进群晖的单文件产物（实测 grep 过产物，无 `system/update`、无 `release-manager`）。上游这批同时把「修改管理员密码」卡片挪了位置，合并时被带回来，已再次去掉。
+### 在线更新与历史回滚：群晖版一律不可用
 
-相关源码文件（`system-update.ts`、`release-manager.ts`、`system-update-routes.ts`、`ReleaseRollbackPanel.vue`）留在仓库里便于以后合并，但不进群晖的单文件产物（实测 grep 过产物，无 `system/update`、无 `release-manager`）。上游这批同时把「修改管理员密码」卡片挪了位置，合并时被带回来，已再次去掉。
+上游这批新增了 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和设置页的「版本更新」「历史回滚」卡片。**这些接口在群晖版没有挂载，一律 404，界面也不显示。**
 
-**构建改用 turbo**（PR #183）：根 `package.json` 的 `build:contract` / `build:web` / `build:core` / `build` 四个脚本改成 `turbo run build`，新增 `turbo.json` 与 `tools/clean-dist.cjs`、`tools/record-build.cjs`。**群晖打包链不需要改**：`synology/build.sh` 仍然是「`pnpm -C web build` → `pnpm build:contract` → `pnpm -C core build:ts`」，只是 `build:contract` 现在内部走 turbo（构建 `packages/session-contract` 的行为不变）。实测这一步在 Windows 上照常通过，`.turbo/` 已在 `.gitignore` 里。注意 `core build` 现在会先删 `dist/`（`prepare:dist`）再全量 `tsc`，`gameConfig`/`proto` 这些资源是 tsc 的 `allowJs` 从 `src/` 复制过去的，删完会重建，实测正常。
+原因不是「目录只读」这么笼统——真正的原因是上游那套更新**要的东西群晖包里一样都没有**：
 
-**上游仍然刻意没引入的那段**：`initialFarmCheckDone` / `initialFriendCheckDone` / `ranchDeferredUntil`（牧场按低优先级闸门推迟）依然不在上游飞牛 fork 里，我们同样没接。合完 grep 过，它们只出现在 `core/src/core/worker.ts` 的 `[fnos-fork]` 注释里。
+| 它需要 | 群晖包里有吗 |
+| --- | --- |
+| 一个 `.git`（`git fetch` / `git pull` 拉源码） | 没有 |
+| 一份源码树 | 没有 |
+| `node_modules` + pnpm + turbo（调 `tools/service-control.mjs` 重新构建） | 没有 |
 
-三个 `package.json` 里**只有 `web` 的版本号变了**（`20261119` → `20261124`），根仍是 `20261116`、`core` 仍是 `20261117`。但脚本与工作区配置变了：根 `package.json` 的构建脚本换 turbo、`devDependencies` 加 `turbo@2.11.13`；`core/package.json` 加 `prepare:dist` / `host-fingerprint`，`build` 改成 `--incremental false` 并写构建指纹，`files` 加了 `!dist/bin`；`web/package.json` 加 `prepare:dist`。`pnpm-lock.yaml` 随之变了（turbo 的平台二进制），`pnpm-workspace.yaml` 没动。`pnpm install --frozen-lockfile` 这次确实装了东西（`+ turbo 2.11.13`），与上次「lock 变了但依赖没变」不同。
+它最后还要写进 `releases/` 切换，而群晖包是「esbuild 单文件 + 预构建的 `web/dist` + 官方 node 二进制」，只有运行期产物。**所以哪怕目录可写，这套流程也无从执行。**
 
-四条验证全过：core 477、web 78、`vue-tsc` 无输出、`web build` 成功，与上游 `2026.11.24.3` 自述的 477/78 一致（core 从 472 涨到 477 是上游新增的帮忙生产迁移单测）。另外补跑了群晖链路本身的检查：`pnpm build:contract`（turbo）通过、`pnpm -C core build:ts` 通过、esbuild 两个单文件产物能打出来（main 6.12 MB、worker 4.58 MB）且 `node --check` 通过、产物里没有 `QQ_FARM_NO_TCP = ` 赋值、`core/node_modules` 下无 `.node` 原生模块、`web/dist/index.html` 资源仍挂根路径 `/assets/`。**这批改动没有用真号验证过**，上游也没装 NAS 实测；多渠道推送、推送直收、帮忙生产都没有真号验证。Linux/DSM 上的实际出包仍未跑（Windows 只能做到构建这步）。
+上游自己对此有现成判定，群晖版会落在 `mode: 'unknown'`：`system-update.ts` 的 `detectEnv` 按 `isPackaged` → docker → 找 `.git` → git 可执行 的顺序判断。群晖版因为是用普通 `node` 跑 `main.js`（不是 `pkg`/SEA 单文件，`isPackaged` 与 `isSea` 都是 false），前两支都不触发；接着在 `appRoot`（`/var/packages/qq-farm-bot/target`）的上两级找 `.git`，`/var/packages/qq-farm-bot` 和 `/var` 下都没有，于是 `repoRoot` 为 null，`unsupportedReason` 是「未找到 Git 仓库根目录（.git），当前运行方式不支持检查更新」。
+
+> 这层判定是**额外的安全网**：即使哪天误挂了路由，也不会真去拉代码。但不能拿它当不挂载的理由——路由挂上了就会把「检查更新」按钮露给用户，点了直接报错，体验比不显示更差。
+
+其次才是治理层面的理由：群晖的版本管理归套件中心，升级要留 `INFO` 的 version 记录、走 `preupgrade` / `postupgrade` 钩子、能回滚到上一个 `.spk`。让面板自己换掉 `server/` 下的文件会绕开这套机制，套件中心显示的版本就和实际跑的对不上。
+
+相关源码文件（`system-update.ts`、`release-manager.ts`、`system-update-routes.ts`、`ReleaseRollbackPanel.vue`）留在仓库里便于以后合并，但**不进群晖的单文件产物**（实测 grep 过产物，无 `system/update`、无 `release-manager`）。上游这批同时把「修改管理员密码」卡片挪了位置，合并时被带回来，已再次去掉。
+
+### 构建改用 turbo（PR #183）
+
+根 `package.json` 的 `build:contract` / `build:web` / `build:core` / `build` 四个脚本改成 `turbo run build`，新增 `turbo.json` 与 `tools/clean-dist.cjs`、`tools/record-build.cjs`。
+
+**群晖打包链不需要改**：`synology/build.sh` 仍然是「`pnpm -C web build` → `pnpm build:contract` → `pnpm -C core build:ts`」，只是 `build:contract` 现在内部走 turbo（构建 `packages/session-contract` 的行为不变）。实测这一步在 Windows 上照常通过，`.turbo/` 已在 `.gitignore` 里。
+
+注意 `core build` 现在会先删 `dist/`（`prepare:dist`）再全量 `tsc`，`gameConfig`/`proto` 这些资源是 tsc 的 `allowJs` 从 `src/` 复制过去的，删完会重建，实测正常。
+
+### 上游仍然刻意没引入的那段
+
+`initialFarmCheckDone` / `initialFriendCheckDone` / `ranchDeferredUntil`（牧场按低优先级闸门推迟）依然不在上游飞牛 fork 里，我们同样没接。合完 grep 过，它们只出现在 `core/src/core/worker.ts` 的 `[fnos-fork]` 注释里。
+
+### 版本号与验证情况
+
+三个 `package.json` 里**只有 `web` 的版本号变了**（`20261119` → `20261124`），根仍是 `20261116`、`core` 仍是 `20261117`。但脚本与工作区配置变了：
+
+| 文件 | 变化 |
+| --- | --- |
+| 根 `package.json` | 构建脚本换 turbo、`devDependencies` 加 `turbo@2.11.13` |
+| `core/package.json` | 加 `prepare:dist` / `host-fingerprint`，`build` 改成 `--incremental false` 并写构建指纹，`files` 加了 `!dist/bin` |
+| `web/package.json` | 加 `prepare:dist` |
+| `pnpm-lock.yaml` | 随之变了（turbo 的平台二进制） |
+| `pnpm-workspace.yaml` | **没动** |
+
+`pnpm install --frozen-lockfile` 这次确实装了东西（`+ turbo 2.11.13`），与上次「lock 变了但依赖没变」不同。
+
+**四条验证全过**：core 477、web 78、`vue-tsc` 无输出、`web build` 成功，与上游 `2026.11.24.3` 自述的 477/78 一致（core 从 472 涨到 477 是上游新增的帮忙生产迁移单测）。
+
+另外补跑了群晖链路本身的检查：
+
+| 检查 | 结果 |
+| --- | --- |
+| `pnpm build:contract`（turbo） | 通过 |
+| `pnpm -C core build:ts` | 通过 |
+| esbuild 两个单文件产物 | main 6.12 MB、worker 4.58 MB，`node --check` 通过 |
+| 产物里有无 `QQ_FARM_NO_TCP = ` 赋值 | 无（正确） |
+| `core/node_modules` 下有无 `.node` 原生模块 | 无（纯 JS） |
+| `web/dist/index.html` 资源路径 | 仍挂根路径 `/assets/` |
+
+> [!WARNING]
+> **这批改动没有用真号验证过**，上游也没装 NAS 实测；多渠道推送、推送直收、帮忙生产都没有真号验证。**Linux/DSM 上的实际出包仍未跑**（Windows 只能做到构建这步）。
 
 ## 项目文档
 
-- [`docs/synology-build.md`](docs/synology-build.md) —— 群晖出包教程：构建机准备、传代码、产物自检、失败对照。
-- [`docs/upstream-sync.md`](docs/upstream-sync.md) —— 同步上游的操作清单：冲突面预演、用 merge 不用 rebase、合并后验证。
-- [`docs/`](docs/README.md) —— 协议研究、配置存储、网络并发模型等专题文档索引。
-- [`synology/`](synology/build.sh) —— 群晖打包链：`build.sh` + `conf/privilege` + `scripts/` 生命周期钩子。
-- [`fnos/`](fnos/飞牛部署与变更说明.md) —— 飞牛版构建链与变更说明；群晖版复用了它的 `fnos/sea/entry.js` 入口和套件图标。
+| 文档 | 内容 |
+| --- | --- |
+| [`docs/synology-build.md`](docs/synology-build.md) | 群晖出包教程：构建机准备、传代码、产物自检、失败对照 |
+| [`docs/upstream-sync.md`](docs/upstream-sync.md) | 同步上游的操作清单：冲突面预演、用 merge 不用 rebase、合并后验证 |
+| [`docs/`](docs/README.md) | 协议研究、配置存储、网络并发模型等专题文档索引 |
+| [`synology/`](synology/build.sh) | 群晖打包链：`build.sh` + `conf/privilege` + `scripts/` 生命周期钩子 |
+| [`fnos/`](fnos/飞牛部署与变更说明.md) | 飞牛版构建链与变更说明；群晖版复用了它的 `fnos/sea/entry.js` 入口和套件图标 |
 
 ## 许可、致谢与下架
 
