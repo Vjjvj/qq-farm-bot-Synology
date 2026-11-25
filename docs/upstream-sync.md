@@ -138,7 +138,33 @@ Select-String -Path core/src/core/worker.ts -Pattern 'initialFarmCheckDone|initi
 
 结果为 0 命中或只在注释里出现，才算对。反过来，上游「有意引入」的部分（那次是 `runWithRequestClass` 排队、`canContinue` 网关健康让路、`wakeRanchMarketExchange` 便便到账唤醒）要逐一确认在代码里真实存在。**遇到上游说「我不引入 X」，就把 X 当成一份负面清单来核对，而不是当它不存在。**
 
-**同类但更容易漏的一种：上游做了某个功能，而它明确说不适用于飞牛 / 群晖这种「只读安装目录 + 应用中心升级」的形态**。2026-11-25 的在线更新就是典型——上游 #182/#183 加了一整套 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和前端「版本更新」「历史回滚」卡片，飞牛自己刻意没挂载。合完后要按四个层次各查一遍，**每层都是 0 命中或只剩注释才算对**：
+**同类但更容易漏的一种：上游做了某个功能，而它对「打包分发」的形态天然不成立**。2026-11-25 的在线更新就是典型——上游 #182/#183 加了一整套 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和前端「版本更新」「历史回滚」卡片，飞牛自己刻意没挂载。
+
+**判断这类功能的准绳是「它依赖什么」，不是「目录可不可写」**。这套更新依赖三样东西：一个 `.git`（`git fetch` / `git pull` 拉源码）、一份源码树、以及 `node_modules` + pnpm + turbo（调 `tools/service-control.mjs` 重新构建）。群晖包里**三样都没有**——只有 esbuild 单文件、预构建的 `web/dist` 和官方 node 二进制。所以「目录只读」不是根本原因，**根本原因是运行期产物包里根本没有可更新的源码与构建工具链**；目录即使可写，也无从执行。
+
+上游代码里对此有现成的分支判定，**但要先确认群晖落在哪一支，别想当然**：
+
+```sh
+Select-String -Path core/src/services/system-update.ts -Pattern "if \(packaged\)|if \(docker\)|if \(!repoRoot\)|if \(!gitReady\)|mode: '"
+```
+
+分支顺序是 `isPackaged` → docker → 找不到 `.git` → git 不可执行 → 才轮到「源码部署且 ControlManaged」。
+
+**2026-11-25 我就在这上面判断错过一次，值得记下来当反例**：一开始想当然认为群晖包是 SEA 单可执行文件，于是判定会落在第一支 `mode: 'binary'`（「当前以独立可执行文件运行…」）。实际读 `synology/scripts/start-stop-status` 才发现，群晖版是用**随包的官方 node 二进制跑 `main.js`**：
+
+```sh
+NODE_BIN="${SYNOPKG_PKGDEST}/node/bin/node"
+MAIN_JS="${SERVER_DIR}/bin/main.js"
+nohup "${NODE_BIN}" "${MAIN_JS}" ...
+```
+
+所以 `process.pkg` 与 `require('node:sea').isSea()` **都是 false**，前两支都不触发；真正命中的是第三支 `mode: 'unknown'`——`resolveSourceRepoRoot` 从 `appRoot`（`/var/packages/qq-farm-bot/target`，即 esbuild 打包后的 `__dirname/../..`）往上找 `.git`，候选是 `/var/packages/qq-farm-bot` 与 `/var`，两处都没有，于是 `repoRoot` 为 null，`unsupportedReason` 是「未找到 Git 仓库根目录（.git），当前运行方式不支持检查更新」。
+
+**这不是靠读代码猜的，是实测出来的**：把 `core/dist` 复制到 `…/packages/qq-farm-bot/target/server/bin/`（复刻群晖的目录层级，`__dirname` 就落在 `server/bin`），并在旁边放好 `@qq-farm-bot/session-contract`，然后直接调 `getSystemUpdateStatus()`，输出 `mode=unknown`、`gitSupported=false`、`reason=未找到 Git 仓库根目录（.git），当前运行方式不支持检查更新`。**这类「到底落哪一支」的问题一律实测，别推理**——我第一次就是在仓库内建测试目录，结果被向上查找命中了仓库自己的 `.git`，得到 `mode=source`、`gitSupported=true` 的错误结论，换到仓库外才复现正确分支。
+
+**教训**：判断「上游某功能在群晖走哪条分支」时，**证据是启动命令与环境变量，不是「我们打了单文件所以应该算打包」这种推理**。飞牛确实是 Node SEA 单可执行文件，群晖只是用了 esbuild 出两个 `.js` 再用官方 node 跑——形态不同，分支就不同。顺带记一个结论：既然群晖落在 `mode: 'unknown'` 而不是 `binary`，**即使哪天误挂了 `system-update-routes`，它也会因为找不到 `.git` 而拒绝拉取**，不会真的去 `git pull`。这层是额外安全网，但**不能拿它当不挂载的理由**——路由挂上了就会把「检查更新」按钮露给用户，点了直接报这句错，体验比不显示更差。
+
+合完后要按四个层次各查一遍，**每层都是 0 命中或只剩注释才算对**：
 
 ```sh
 # 1 路由没挂：只剩注释里提到 system-update-routes 才对

@@ -155,7 +155,17 @@ VERSION_ONLY=1 synology/build.sh               # 只看自动选出的版本号�
 
 **面板版本检测**（PR #182，群晖版只保留这一小块）：前端构建时生成 `version.json`（`buildId`），后端 `/version.json` 与 `/api/ping` 的 `webBuildId` 都带上，Socket.IO `ready` 也带。**作用是套件升级后浏览器里的旧页面会自动刷新到新版**（有未保存编辑时显示「新版已就绪，点击刷新」）。只比较本机后端的前端构建号，不访问 GitHub、不检查上游版本。
 
-**在线更新与历史回滚在群晖版一律不可用**（PR #182/#183）：上游新增了 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和设置页的「版本更新」「历史回滚」卡片。**这些接口在群晖版没有挂载，一律 404，界面也不显示**——群晖升级只走套件中心覆盖安装，让面板自己去 `git pull` 再重建源码，在只读的安装目录里做不到，也会绕开套件中心的版本管理。相关源码文件（`system-update.ts`、`release-manager.ts`、`system-update-routes.ts`、`ReleaseRollbackPanel.vue`）留在仓库里便于以后合并，但不进群晖的单文件产物（实测 grep 过产物，无 `system/update`、无 `release-manager`）。上游这批同时把「修改管理员密码」卡片挪了位置，合并时被带回来，已再次去掉。
+**在线更新与历史回滚在群晖版一律不可用**（PR #182/#183）：上游新增了 `/api/system/update/*`（检查 / 拉取 / 应用 / 回滚 / 删除备份 / 备份开关）和设置页的「版本更新」「历史回滚」卡片。**这些接口在群晖版没有挂载，一律 404，界面也不显示**。
+
+原因不是「目录只读」这么笼统——真正的原因是上游那套更新**要的东西群晖包里一样都没有**：它靠 `git fetch` / `git pull` 拉源码，再调 `tools/service-control.mjs` 跑 `pnpm install` + `turbo run build` 重新构建前后端，最后写进 `releases/` 切换。而群晖包是「esbuild 单文件 + 预构建的 `web/dist` + 官方 node 二进制」，**既没有 `.git`、没有源码、也没有 `node_modules` 和 pnpm**，只有运行期产物。所以哪怕目录可写，这套流程也无从执行。
+
+上游自己对此有现成判定，群晖版会落在 `mode: 'unknown'`：`system-update.ts` 的 `detectEnv` 按 `isPackaged` → docker → 找 `.git` → git 可执行 的顺序判断，群晖版因为是用普通 `node` 跑 `main.js`（不是 `pkg`/SEA 单文件，`isPackaged` 与 `isSea` 都是 false），前两支都不触发；接着在 `appRoot`（`/var/packages/qq-farm-bot/target`）的上两级找 `.git`，`/var/packages/qq-farm-bot` 和 `/var` 下都没有，于是 `repoRoot` 为 null，`unsupportedReason` 是「未找到 Git 仓库根目录（.git），当前运行方式不支持检查更新」。**这层判定是额外的安全网**：即使哪天误挂了路由，也不会真去拉代码。
+
+其次才是治理层面的理由：群晖的版本管理归套件中心，升级要留 `INFO` 的 version 记录、走 `preupgrade` / `postupgrade` 钩子、能回滚到上一个 `.spk`。让面板自己换掉 `server/` 下的文件会绕开这套机制，套件中心显示的版本就和实际跑的对不上，卸载/升级钩子也会按旧版本假设去动新文件。
+
+相关源码文件（`system-update.ts`、`release-manager.ts`、`system-update-routes.ts`、`ReleaseRollbackPanel.vue`）留在仓库里便于以后合并，但不进群晖的单文件产物（实测 grep 过产物，无 `system/update`、无 `release-manager`）。上游这批同时把「修改管理员密码」卡片挪了位置，合并时被带回来，已再次去掉。
+
+相关源码文件（`system-update.ts`、`release-manager.ts`、`system-update-routes.ts`、`ReleaseRollbackPanel.vue`）留在仓库里便于以后合并，但不进群晖的单文件产物（实测 grep 过产物，无 `system/update`、无 `release-manager`）。上游这批同时把「修改管理员密码」卡片挪了位置，合并时被带回来，已再次去掉。
 
 **构建改用 turbo**（PR #183）：根 `package.json` 的 `build:contract` / `build:web` / `build:core` / `build` 四个脚本改成 `turbo run build`，新增 `turbo.json` 与 `tools/clean-dist.cjs`、`tools/record-build.cjs`。**群晖打包链不需要改**：`synology/build.sh` 仍然是「`pnpm -C web build` → `pnpm build:contract` → `pnpm -C core build:ts`」，只是 `build:contract` 现在内部走 turbo（构建 `packages/session-contract` 的行为不变）。实测这一步在 Windows 上照常通过，`.turbo/` 已在 `.gitignore` 里。注意 `core build` 现在会先删 `dist/`（`prepare:dist`）再全量 `tsc`，`gameConfig`/`proto` 这些资源是 tsc 的 `allowJs` 从 `src/` 复制过去的，删完会重建，实测正常。
 

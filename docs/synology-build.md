@@ -206,6 +206,7 @@ grep -a qq-farm-bot /var/log/synopkg.log | tail -20      # 安装链路：preins
 - 应用**没有登录页**，信任边界就是「谁能连到这个端口」。包默认写 `ADMIN_HOST="0.0.0.0"`，方便局域网直开，代价是同网段任何人可控制你挂上去的 QQ 账号。
 - 经反代/隧道暴露时，反代必须**清掉 `X-Trim-*` 请求头**：没有这些头时应用把访问者当作管理员，而客户端自己伪造 `X-Trim-Isadmin: false` 反而会把自己降成普通用户。
 - **面板不会自己联网查更新**（2026-11-25 核实）：上游 #182 加的在线更新 / 回滚接口（`/api/system/update/*`）在群晖版没有挂载，设置页也不显示对应卡片。唯一保留的是「前端构建号变了就提示刷新」——它读 `/version.json` 和 `/api/ping` 的 `webBuildId`，**都来自本机后端，不访问 GitHub**。改打包链或合并上游后，按 [`docs/upstream-sync.md`](upstream-sync.md) 第 2 节那四层 grep 复核一遍，别让「检查新版本」的代码被顺路带进来。
+- **群晖包是「普通 node 跑 esbuild 产物」，不是 SEA/pkg 单可执行文件**——这点在判断上游形态相关分支时必须先搞清楚，别把群晖当成飞牛。启动方式见 [`synology/scripts/start-stop-status`](../synology/scripts/start-stop-status)：`nohup "${NODE_BIN}" "${MAIN_JS}"`，`NODE_BIN` 是随包的官方 node，`MAIN_JS` 是 `server/bin/main.js`。因此 `process.pkg` 和 `node:sea` 的 `isSea()` 都是 false。实测（把 `core/dist` 放到 `target/server/bin/` 复刻层级后调 `getSystemUpdateStatus()`）群晖落在上游 `detectEnv` 的 `mode: 'unknown'` 分支，理由是「未找到 Git 仓库根目录（.git）」。**推论**：群晖包里有运行的只有 `bin/*.js`、`server/resources/`、`server/web/dist` 和 `node/`，**没有源码、没有 `.git`、没有 `node_modules`、没有 pnpm**——任何「在面板里重新构建」的功能在这里都无从执行，不只是因为目录权限。
 - 想把默认值改掉，改 [`synology/scripts/postinst`](../synology/scripts/postinst) 里那段 `settings.conf` 模板；它只在文件不存在时写入，所以升级不会覆盖用户已改的配置。
 
 ## 相关文档
