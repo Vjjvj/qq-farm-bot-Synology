@@ -1,4 +1,6 @@
 import type { AccountConfig, AutomationConfig, BagSeedFallbackStrategy, FertilizerLandType, FertilizerMode, GlobalConfig, IntervalConfig, LoginSettings, OfflineReminder, PlantingStrategy, QuietHoursConfig } from '../../types/config';
+import { normalizeNotificationTypes } from '../../config/notification-types';
+import { PUSHOO_CHANNELS } from '../../config/push-channels';
 export {};
 
 const { DEFAULT_TIME_ZONE, normalizeTimeZone, resolveClientVersion } = require('../../config/config');
@@ -22,13 +24,6 @@ const KNOWN_FRIEND_GIDS_DIR: string = getDataFile('known_friend_gids');
 
 const ALLOWED_PLANTING_STRATEGIES: PlantingStrategy[] = ['preferred', 'level', 'max_exp', 'max_fert_exp', 'max_profit', 'max_fert_profit', 'bag_priority'];
 const ALLOWED_BAG_SEED_FALLBACK_STRATEGIES: BagSeedFallbackStrategy[] = ALLOWED_PLANTING_STRATEGIES.filter((s): s is BagSeedFallbackStrategy => s !== 'bag_priority');
-const PUSHOO_CHANNELS: Set<string> = new Set([
-    'webhook', 'qmsg', 'serverchan', 'pushplus', 'pushplushxtrip',
-    'dingtalk', 'wecom', 'bark', 'gocqhttp', 'onebot', 'atri',
-    'pushdeer', 'igot', 'telegram', 'feishu', 'ifttt', 'wecombot',
-    'discord', 'wxpusher', 'meow',
-]);
-
 const DEFAULT_FERTILIZER_LAND_TYPES: FertilizerLandType[] = ['purple-gold', 'gold', 'black', 'red', 'normal'];
 const FERTILIZER_MODES = new Set<FertilizerMode>(['both', 'normal', 'organic', 'smart', 'none', 'normal_ripen', 'organic_ripen']);
 const ALL_FERTILIZER_LAND_TYPES: FertilizerLandType[] = ['blue-crystal', ...DEFAULT_FERTILIZER_LAND_TYPES];
@@ -40,6 +35,8 @@ let systemConfigMigrated: boolean = false;
 let accountFallbackConfig: AccountConfig;
 
 const DEFAULT_OFFLINE_REMINDER: OfflineReminder = {
+    notificationTypes: normalizeNotificationTypes(),
+    channels: [],
     channel: 'webhook',
     endpoint: '',
     token: '',
@@ -376,13 +373,15 @@ function normalizeFertilizerMode(value: unknown, fallback: FertilizerMode): Fert
 function normalizeAccountConfig(input: unknown, fallback: AccountConfig = accountFallbackConfig): AccountConfig {
     const src: Record<string, any> = (input && typeof input === 'object') ? input as Record<string, any> : {};
     const cfg = cloneAccountConfig(fallback || DEFAULT_ACCOUNT_CONFIG);
+    // [fnos-fork] 2026-11-25 fork「好友牧场：帮忙生产」并入上游 ranch_friend_produce（旧开关开着且上游未设置 → 上游开）
+    const srcAutomation = require('../../services/ranch/fnos-ranch').migrateFnosHelpProduce(src);
 
-    if (src.automation && typeof src.automation === 'object') {
+    if (srcAutomation && typeof srcAutomation === 'object') {
         // 旧账号同时关闭补栏与金券升级时保留手动解锁。
-        if (src.automation.ranch_activate_shed === undefined && src.automation.ranch_upgrade === false && src.automation.ranch_buy === false) {
+        if (srcAutomation.ranch_activate_shed === undefined && srcAutomation.ranch_upgrade === false && srcAutomation.ranch_buy === false) {
             cfg.automation.ranch_activate_shed = false;
         }
-        for (const [k, v] of Object.entries(migrateRanchMarketAutomation(src.automation))) {
+        for (const [k, v] of Object.entries(migrateRanchMarketAutomation(srcAutomation))) {
             if (!ALLOWED_AUTOMATION_KEYS.has(k)) continue;
             if (k === 'fertilizer') {
                 cfg.automation.fertilizer = normalizeFertilizerMode(v, cfg.automation.fertilizer);

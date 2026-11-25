@@ -51,6 +51,9 @@ export const useStatusStore = defineStore('status', () => {
   const loading = ref(false)
   const error = ref('')
   const realtimeConnected = ref(false)
+  const realtimeReconnecting = ref(false)
+  const realtimeReconnectCount = ref(0)
+  const serverWebBuildId = ref('')
   const realtimeLogsEnabled = ref(true)
   const currentRealtimeAccountId = ref('')
 
@@ -62,6 +65,8 @@ export const useStatusStore = defineStore('status', () => {
   })
 
   let socket: Socket | null = null
+  let hasRealtimeConnected = false
+  let reconnectDelayTimer: ReturnType<typeof setTimeout> | null = null
   let statusRequestSequence = 0
   let diamondRequestSequence = 0
 
@@ -107,9 +112,27 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function handleRealtimeLogsSnapshot(payload: any) {
+    // 筛选启用时实时日志已暂停，全量快照会把筛选结果覆盖回全量日志，
+    // 导致列表在「筛选结果」和「全部日志」之间来回跳。
+    if (!realtimeLogsEnabled.value)
+      return
     const body = (payload && typeof payload === 'object') ? payload : {}
     const list = Array.isArray(body.logs) ? body.logs : []
     logs.value = list.map((item: any) => normalizeLogEntry(item))
+  }
+
+  function clearReconnectDelayTimer() {
+    if (reconnectDelayTimer) {
+      clearTimeout(reconnectDelayTimer)
+      reconnectDelayTimer = null
+    }
+  }
+
+  function handleReconnectAttempt() {
+    if (!hasRealtimeConnected)
+      return
+    clearReconnectDelayTimer()
+    realtimeReconnecting.value = true
   }
 
   function ensureRealtimeSocket() {
@@ -124,7 +147,13 @@ export const useStatusStore = defineStore('status', () => {
     })
 
     socket.on('connect', () => {
+      clearReconnectDelayTimer()
+      const wasConnected = hasRealtimeConnected
+      hasRealtimeConnected = true
+      if (wasConnected && !realtimeConnected.value)
+        realtimeReconnectCount.value++
       realtimeConnected.value = true
+      realtimeReconnecting.value = false
       if (currentRealtimeAccountId.value) {
         socket?.emit('subscribe', { accountId: currentRealtimeAccountId.value })
       }
@@ -133,18 +162,42 @@ export const useStatusStore = defineStore('status', () => {
       }
     })
 
-    socket.on('disconnect', () => {
+    socket.on('ready', (payload: any) => {
+      const id = String(payload?.webBuildId || '').trim()
+      if (id)
+        serverWebBuildId.value = id
+    })
+
+    socket.on('panel:version', (payload: any) => {
+      const id = String(payload?.webBuildId || '').trim()
+      if (id)
+        serverWebBuildId.value = id
+    })
+
+    socket.on('disconnect', (reason: any) => {
       realtimeConnected.value = false
+      if (hasRealtimeConnected && String(reason || '') !== 'io client disconnect' && !reconnectDelayTimer && !realtimeReconnecting.value) {
+        reconnectDelayTimer = setTimeout(() => {
+          reconnectDelayTimer = null
+          if (!realtimeConnected.value && hasRealtimeConnected)
+            realtimeReconnecting.value = true
+        }, 600)
+      }
     })
 
     socket.on('connect_error', (err) => {
       realtimeConnected.value = false
+      if (hasRealtimeConnected && String(err?.message || '') !== 'Unauthorized') {
+        clearReconnectDelayTimer()
+        realtimeReconnecting.value = true
+      }
       console.error('[realtime] 连接失败:', err.message)
     })
 
     socket.on('status:update', handleRealtimeStatus)
     socket.on('log:new', handleRealtimeLog)
     socket.on('logs:snapshot', handleRealtimeLogsSnapshot)
+    ;(socket.io as any)?.on?.('reconnect_attempt', handleReconnectAttempt)
     return socket
   }
 
@@ -174,14 +227,20 @@ export const useStatusStore = defineStore('status', () => {
   }
 
   function disconnectRealtime() {
+    clearReconnectDelayTimer()
+    hasRealtimeConnected = false
+    realtimeReconnecting.value = false
     if (!socket)
       return
     socket.off('connect')
+    socket.off('ready')
+    socket.off('panel:version')
     socket.off('disconnect')
     socket.off('connect_error')
     socket.off('status:update', handleRealtimeStatus)
     socket.off('log:new', handleRealtimeLog)
     socket.off('logs:snapshot', handleRealtimeLogsSnapshot)
+    ;(socket.io as any)?.off?.('reconnect_attempt', handleReconnectAttempt)
     socket.disconnect()
     socket = null
     realtimeConnected.value = false
@@ -303,6 +362,9 @@ export const useStatusStore = defineStore('status', () => {
     loading,
     error,
     realtimeConnected,
+    realtimeReconnecting,
+    realtimeReconnectCount,
+    serverWebBuildId,
     currentAccountConnected,
     realtimeLogsEnabled,
     fetchStatus,

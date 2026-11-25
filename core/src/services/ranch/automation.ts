@@ -88,7 +88,10 @@ function resetCycle(keepFriendProgress = false): void {
     cycleChanged = false;
     ownRecheckUsed = false;
 }
-const FRIEND_CONTROLS: Record<string, string> = { stroke: 'ranch_stroke', steal: 'ranch_friend_steal', cleanFriend: 'ranch_friend_clean', putMosquito: 'ranch_friend_mosquito' };
+const FRIEND_CONTROLS: Record<string, string> = {
+    steal: 'ranch_friend_steal', produceFriend: 'ranch_friend_produce', cleanFriend: 'ranch_friend_clean',
+    stroke: 'ranch_stroke', putMosquito: 'ranch_friend_mosquito',
+};
 const enabled = (key: string) => getAutomation()[key] === true;
 function logCanFeed(canLabel: string, message: string, result: 'skipped' | 'ok'): void {
     log('牧场', `${canLabel}：${message}`, {
@@ -557,7 +560,7 @@ async function run(options: { farmDeadline?: () => number; sliceMs?: number; can
             await phase('friends', async () => {
                 // [fnos-fork] 2026-11-17 没有到点的好友牧场、常规轮巡也没到间隔、也没有要探的好友牧场：这一轮不碰好友（省掉次数查询和好友列表）
                 if (!fnosDueRanch.length && !pendingFriend && Date.now() < fnosNextRegularFriendsAt && !fnosRanchProbePending()) return;
-                if (Object.values(FRIEND_CONTROLS).some(enabled) || fnosRanch.friendExtrasEnabled() || Object.keys(FRIEND_CONTROLS).some(canInteract)) { // [fnos-fork] 帮好友生产 / 给好友加牧草
+                if (Object.values(FRIEND_CONTROLS).some(enabled) || fnosRanch.friendExtrasEnabled() || Object.keys(FRIEND_CONTROLS).some(canInteract)) { // [fnos-fork] 给好友加牧草
                     fnosRanch.beginFriendPhase({ gold: Number(available(1007)), grass: Number(available(7001)) }); // [fnos-fork] 2026-11-17 给好友加牧草默认用仓库牧草
                     checkpoint();
                     patrolFriends ??= await getRanchFriendList(completedBatch => {
@@ -567,7 +570,7 @@ async function run(options: { farmDeadline?: () => number; sliceMs?: number; can
                     const blacklist = new Set(getRanchFriendBlacklist(process.env.FARM_ACCOUNT_ID));
                     const friends = patrolFriends.filter(friend => !blacklist.has(friend.gid));
                     if (!friends.length) return;
-                    const hasBulkWork = enabled('ranch_friend_steal') || enabled('ranch_friend_clean') || fnosRanch.friendExtrasEnabled();
+                    const hasBulkWork = canInteract('steal') || canInteract('produceFriend') || canInteract('cleanFriend') || fnosRanch.friendExtrasEnabled();
                     const times = hasBulkWork ? {} : await interactions.getInteractionTimes();
                     const wanted = (action: string) => canInteract(action) && times[action] !== 0;
                     const anyWanted = () => Object.keys(FRIEND_CONTROLS).some(wanted) || fnosRanch.friendExtrasEnabled();
@@ -597,7 +600,8 @@ async function run(options: { farmDeadline?: () => number; sliceMs?: number; can
                                 checkpoint();
                             }
                             if (!canVisit() || (pendingFriend?.gid !== gid && statusDecides() && Date.now() - friend.statusAtMs <= FRIEND_STATUS_FRESH_MS
-                                && !(wanted('steal') && friend.canSteal) && !(wanted('cleanFriend') && friend.canHelp))) {
+                                && !(wanted('steal') && friend.canSteal) && !(wanted('produceFriend') && friend.canMidwife)
+                                && !(wanted('cleanFriend') && friend.canHelp))) {
                                 pendingFriend = null;
                                 return;
                             }

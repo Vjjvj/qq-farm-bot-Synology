@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import type { PushChannelChange } from '@/stores/setting'
 import { NButton } from 'naive-ui/es/button'
 import { NTab } from 'naive-ui/es/tabs'
 import { NTimePicker } from 'naive-ui/es/time-picker'
@@ -14,12 +15,15 @@ import PageTabs from '@/components/PageTabs.vue'
 import AutomationSettingsForm from '@/components/settings/AutomationSettingsForm.vue'
 import BagSeedPriorityItem from '@/components/settings/BagSeedPriorityItem.vue'
 import FnosForkSettings from '@/components/settings/FnosForkSettings.vue' // [fnos-fork] 大小号协作、活动设置（占位）
+import PushChannelsManager from '@/components/settings/PushChannelsManager.vue'
 import BaseButton from '@/components/ui/BaseButton.vue'
 import BaseInput from '@/components/ui/BaseInput.vue'
 import BaseSelect from '@/components/ui/BaseSelect.vue'
 import BaseSwitch from '@/components/ui/BaseSwitch.vue'
+import { useUnsavedEditGuard } from '@/composables/useUnsavedEditGuard'
 import { getPlatformClass, getPlatformLabel, useAccountStore } from '@/stores/account'
-import { useSettingStore } from '@/stores/setting'
+import { useAppUpdateStore } from '@/stores/app-update'
+import { getPushChannelLabel, normalizeOfflineConfig, useSettingStore } from '@/stores/setting'
 import { useStatusStore } from '@/stores/status'
 import { fnosNormalizeIllustratedAuto } from '@/utils/fnos-illustrated-auto' // [fnos-fork] 图鉴（自动控制）
 import { fnosNormalizeQuietPriority } from '@/utils/fnos-quiet-priority' // [fnos-fork] 自己收菜优先 / 空闲时只保留心跳（自动控制）
@@ -41,6 +45,7 @@ const inRanch = computed(() => route.meta.gameSpace === 'ranch')
 const accountStore = useAccountStore()
 const settingStore = useSettingStore()
 const statusStore = useStatusStore()
+const appUpdateStore = useAppUpdateStore()
 
 type SettingsTab = 'account' | 'strategy' | 'automation' | 'fnos-coop' | 'fnos-alt' | 'system' // [fnos-fork] 新增 fnos-coop（大小号协作）、fnos-alt（活动设置）
 const storedTab = localStorage.getItem('settings-active-tab')
@@ -156,6 +161,8 @@ onMounted(async () => {
   }
   if (currentAccountId.value)
     await loadStrategyData(currentAccountId.value)
+  else
+    await settingStore.fetchSettings('')
   await Promise.all([loadSystemConfig(), loadDevicePresets()])
 })
 
@@ -769,6 +776,10 @@ watch(() => [
   }
 }, { immediate: true })
 
+const savedStrategySnapshot = ref('')
+const savedAutomationSnapshot = ref('')
+const savedOfflineSnapshot = ref('')
+
 function syncLocalStrategySettings() {
   if (settings.value) {
     localStrategySettings.value = JSON.parse(JSON.stringify({
@@ -790,6 +801,7 @@ function syncLocalStrategySettings() {
         ...(settings.value.friendQuietHours || {}),
       },
     }))
+    savedStrategySnapshot.value = JSON.stringify(localStrategySettings.value)
   }
 }
 
@@ -802,7 +814,7 @@ async function loadStrategyData(accountId = currentAccountId.value) {
     return
   syncLocalStrategySettings()
   syncLocalAutomationSettings()
-  syncLocalOfflineSettings()
+  syncLocalOfflineSettings(true)
   if (isAccountConnected(accountId))
     await fetchSeedOptions(accountId)
 }
@@ -839,6 +851,9 @@ async function saveStrategySettings() {
 }
 
 watch(currentAccountId, (accountId) => {
+  savedOfflineSnapshot.value = ''
+  savedAutomationSnapshot.value = ''
+  savedStrategySnapshot.value = ''
   strategySaving.value = false
   automationSaving.value = false
   draggingBagSeedId.value = null
@@ -1037,6 +1052,7 @@ function syncLocalAutomationSettings() {
     localAutomationSettings.value.fnosQuietPriority = fnosNormalizeQuietPriority(settings.value.fnosQuietPriority) // [fnos-fork]
     localAutomationSettings.value.fnosRanch = fnosNormalizeRanch(settings.value.fnosRanch) // [fnos-fork] 2026-11-16
     localAutomationSettings.value.fnosGrassLands = fnosNormalizeGrassLands(settings.value.fnosGrassLands) // [fnos-fork] 2026-11-16
+    savedAutomationSnapshot.value = JSON.stringify(localAutomationSettings.value)
   }
 }
 
@@ -1104,155 +1120,71 @@ async function saveAutomationSettings() {
 const offlineSaving = ref(false)
 const offlineTesting = ref(false)
 
-const localOffline = ref({
-  channel: 'webhook',
-  endpoint: '',
-  token: '',
-  secret: '',
-  title: '',
-  msg: '',
-  offlineDeleteSec: 0,
-  barkCritical: true, // [fnos-fork]
-})
+const localOffline = ref(normalizeOfflineConfig())
+const hasActivePushChannel = computed(() =>
+  localOffline.value.channels.some(c => c.enabled),
+)
+// [fnos-fork] Bark 重要警告开关：配置了 Bark 渠道时显示
+const hasBarkChannel = computed(() =>
+  localOffline.value.channels.some(c => c.channel === 'bark'),
+)
 
-const channelOptions = [
-  { label: 'Webhook(自定义接口)', value: 'webhook' },
-  { label: 'Qmsg 酱', value: 'qmsg' },
-  { label: 'Server 酱', value: 'serverchan' },
-  { label: 'Push Plus', value: 'pushplus' },
-  { label: 'Push Plus Hxtrip', value: 'pushplushxtrip' },
-  { label: '钉钉', value: 'dingtalk' },
-  { label: '企业微信', value: 'wecom' },
-  { label: 'Bark', value: 'bark' },
-  { label: 'Go-cqhttp', value: 'gocqhttp' },
-  { label: 'OneBot', value: 'onebot' },
-  { label: 'Atri', value: 'atri' },
-  { label: 'PushDeer', value: 'pushdeer' },
-  { label: 'iGot', value: 'igot' },
-  { label: 'Telegram', value: 'telegram' },
-  { label: '飞书', value: 'feishu' },
-  { label: 'IFTTT', value: 'ifttt' },
-  { label: '企业微信群机器人', value: 'wecombot' },
-  { label: 'Discord', value: 'discord' },
-  { label: 'WxPusher', value: 'wxpusher' },
-  { label: 'MeoW', value: 'meow' },
-]
-
-const CHANNEL_DOCS: Record<string, string> = {
-  webhook: '',
-  qmsg: 'https://qmsg.zendee.cn/',
-  serverchan: 'https://sct.ftqq.com/',
-  pushplus: 'https://www.pushplus.plus/',
-  pushplushxtrip: 'https://pushplus.hxtrip.com/',
-  dingtalk: 'https://open.dingtalk.com/document/orgapp/customize-robot-security-settings',
-  wecom: 'https://guole.fun/posts/626/',
-  wecombot: 'https://developer.work.weixin.qq.com/document/path/91770',
-  bark: 'https://github.com/Finb/Bark',
-  gocqhttp: 'https://docs.go-cqhttp.org/api/',
-  onebot: 'https://docs.go-cqhttp.org/api/',
-  atri: 'https://blog.tianli0.top/',
-  pushdeer: 'https://www.pushdeer.com/',
-  igot: 'https://push.hellyw.com/',
-  telegram: 'https://core.telegram.org/bots',
-  feishu: 'https://www.feishu.cn/hc/zh-CN/articles/360024984973',
-  ifttt: 'https://ifttt.com/maker_webhooks',
-  discord: 'https://discord.com/developers/docs/resources/webhook#execute-webhook',
-  wxpusher: 'https://wxpusher.zjiecode.com/docs/#/',
-  meow: 'https://www.chuckfang.com/MeoW/api_doc.html',
+function getOfflineGeneralSnapshot(cfg = localOffline.value): string {
+  return JSON.stringify({
+    notificationTypes: cfg.notificationTypes,
+    title: cfg.title,
+    msg: cfg.msg,
+    offlineDeleteSec: cfg.offlineDeleteSec,
+    barkCritical: cfg.barkCritical !== false, // [fnos-fork]
+  })
 }
 
-const offlineChannel = computed(() => String(localOffline.value.channel || '').trim().toLowerCase())
-const isDingTalkChannel = computed(() => offlineChannel.value === 'dingtalk')
-const isMeowChannel = computed(() => offlineChannel.value === 'meow')
-const isBarkChannel = computed(() => offlineChannel.value === 'bark') // [fnos-fork]
-const offlineChannelUsesEndpoint = computed(() => offlineChannel.value === 'webhook' || isDingTalkChannel.value)
-const offlineEndpointLabel = computed(() => isDingTalkChannel.value ? 'Webhook 地址' : '接口地址')
-const offlineEndpointPlaceholder = computed(() => isDingTalkChannel.value
-  ? '从钉钉群机器人设置页复制完整 Webhook'
-  : '接收消息的接口地址')
-const offlineTokenLabel = computed(() => isMeowChannel.value ? '昵称' : 'Token')
-const offlineTokenPlaceholder = computed(() => isMeowChannel.value
-  ? 'MeoW 注册昵称'
-  : '接收端 token')
-const currentChannelDocUrl = computed(() => CHANNEL_DOCS[offlineChannel.value] || '')
-
-function openChannelDocs() {
-  const url = currentChannelDocUrl.value
-  if (!url)
+function syncLocalOfflineSettings(force = false) {
+  if (!settings.value?.offlineReminder)
     return
-  window.open(url, '_blank', 'noopener,noreferrer')
-}
-
-function syncLocalOfflineSettings() {
-  if (settings.value?.offlineReminder) {
-    const saved = JSON.parse(JSON.stringify(settings.value.offlineReminder))
-    const next = {
-      channel: 'webhook',
-      endpoint: '',
-      token: '',
-      secret: '',
-      title: '',
-      msg: '',
-      offlineDeleteSec: 0,
-      ...saved,
+  const next = normalizeOfflineConfig(settings.value.offlineReminder)
+  if (!force && savedOfflineSnapshot.value && getOfflineGeneralSnapshot(localOffline.value) !== savedOfflineSnapshot.value) {
+    localOffline.value = {
+      ...localOffline.value,
+      channel: next.channel,
+      endpoint: next.endpoint,
+      token: next.token,
+      secret: next.secret,
+      channels: next.channels,
     }
-    next.barkCritical = saved.barkCritical !== false // [fnos-fork] 老配置缺字段视为开启
-
-    if (String(next.channel || '').trim().toLowerCase() === 'dingtalk') {
-      const legacyToken = String(next.token || '').trim()
-      if (!String(next.endpoint || '').trim() && legacyToken) {
-        next.endpoint = /^https?:\/\//i.test(legacyToken)
-          ? legacyToken
-          : `https://oapi.dingtalk.com/robot/send?access_token=${encodeURIComponent(legacyToken)}`
-      }
-      next.token = ''
-    }
-
-    localOffline.value = next
+    return
   }
-}
-
-function validateDingTalkWebhook(): string {
-  if (!isDingTalkChannel.value)
-    return ''
-
-  const endpoint = String(localOffline.value.endpoint || '').trim()
-  if (!endpoint)
-    return '请填写钉钉机器人设置页提供的完整 Webhook 地址'
-
-  try {
-    const url = new URL(endpoint)
-    const isOfficialWebhook = url.protocol === 'https:'
-      && url.hostname.toLowerCase() === 'oapi.dingtalk.com'
-      && url.pathname === '/robot/send'
-      && !!url.searchParams.get('access_token')
-    if (!isOfficialWebhook)
-      return '钉钉 Webhook 地址格式不正确，请从群机器人设置页重新复制'
-  }
-  catch {
-    return '钉钉 Webhook 地址格式不正确，请从群机器人设置页重新复制'
-  }
-
-  return ''
+  localOffline.value = next
+  savedOfflineSnapshot.value = getOfflineGeneralSnapshot(next)
 }
 
 watch(settings, () => {
-  syncLocalOfflineSettings()
+  syncLocalOfflineSettings(false)
 }, { deep: true })
 
-async function handleSaveOffline() {
-  const validationError = validateDingTalkWebhook()
-  if (validationError) {
-    showAlert(validationError, 'danger')
-    return
-  }
-
+async function handleSaveChannel(change: PushChannelChange, onDone: (ok: boolean) => void) {
   offlineSaving.value = true
   try {
-    const res = await settingStore.saveOfflineConfig(localOffline.value)
+    const result = await settingStore.saveOfflineConfig(change)
+    if (!result.ok)
+      showAlert(`保存推送渠道失败: ${result.error || '未知错误'}`, 'danger')
+    onDone(result.ok)
+  }
+  finally {
+    offlineSaving.value = false
+  }
+}
+
+async function handleSaveOffline() {
+  offlineSaving.value = true
+  try {
+    const { title, msg, offlineDeleteSec, notificationTypes, barkCritical } = localOffline.value
+    const res = await settingStore.saveOfflineConfig({ title, msg, offlineDeleteSec, notificationTypes, barkCritical: barkCritical !== false /* [fnos-fork] */ })
 
     if (res.ok) {
-      showAlert('下线提醒设置已保存', 'primary')
+      localOffline.value = normalizeOfflineConfig(settingStore.settings.offlineReminder)
+      savedOfflineSnapshot.value = getOfflineGeneralSnapshot(localOffline.value)
+      showAlert('通知设置已保存', 'primary')
     }
     else {
       showAlert(`保存失败: ${res.error || '未知错误'}`, 'danger')
@@ -1264,17 +1196,25 @@ async function handleSaveOffline() {
 }
 
 async function handleTestOffline() {
-  const validationError = validateDingTalkWebhook()
-  if (validationError) {
-    showAlert(validationError, 'danger')
+  if (!hasActivePushChannel.value) {
+    showAlert('请先配置并启用至少一个推送渠道', 'danger')
     return
   }
 
   offlineTesting.value = true
   try {
-    const { data } = await api.post('/api/settings/offline-reminder/test', localOffline.value)
+    const { data } = await api.post('/api/settings/offline-reminder/test', {
+      title: localOffline.value.title,
+      msg: localOffline.value.msg,
+      barkCritical: localOffline.value.barkCritical !== false, // [fnos-fork] 测试也按当前开关走 Bark 重要警告
+    })
     if (data?.ok) {
-      showAlert('测试消息发送成功', 'primary')
+      const failed = Array.isArray(data.data) ? data.data.filter((item: { ok: boolean }) => !item.ok) : []
+      const message = data.message || '测试消息发送成功'
+      if (failed.length)
+        showAlert(`${message}。${failed.map((item: { channel: string, msg: string }) => `${getPushChannelLabel(item.channel)}：${item.msg}`).join('；')}`, 'danger')
+      else
+        showAlert(message, 'primary')
     }
     else {
       showAlert(`测试失败: ${getApiErrorMessage(data, '未知错误')}`, 'danger')
@@ -1292,6 +1232,8 @@ async function handleTestOffline() {
 const systemConfigSaving = ref(false)
 const systemConfigLoading = ref(false)
 const loginSettingsSaving = ref(false)
+const savedSystemConfigSnapshot = ref('')
+const savedLoginSettingsSnapshot = ref('')
 
 const defaultDeviceInfo = {
   os: 'Windows',
@@ -1402,6 +1344,8 @@ async function loadSystemConfig() {
       defaultSystemConfig.value = normalizeSystemConfig(data.data.default, defaultSystemConfig.value)
       localSystemConfig.value = normalizeSystemConfig(data.data.saved || data.data.default, defaultSystemConfig.value)
       localLoginSettings.value = normalizeLoginSettings(data.data.loginSettings)
+      savedSystemConfigSnapshot.value = JSON.stringify(localSystemConfig.value)
+      savedLoginSettingsSnapshot.value = JSON.stringify(localLoginSettings.value)
     }
   }
   catch (e) {
@@ -1423,6 +1367,7 @@ async function handleSaveLoginSettings() {
     const { data } = await api.post('/api/settings/login-config', localLoginSettings.value)
     if (data?.ok) {
       localLoginSettings.value = normalizeLoginSettings(data.data)
+      savedLoginSettingsSnapshot.value = JSON.stringify(localLoginSettings.value)
     }
     showAlert(data?.ok ? '登录设置已保存' : getApiErrorMessage(data, '保存失败'), data?.ok ? 'primary' : 'danger')
   }
@@ -1440,6 +1385,8 @@ async function handleSaveSystemConfig() {
     localSystemConfig.value.clientVersion = localSystemConfig.value.deviceInfo.clientVersion
     localSystemConfig.value.os = localSystemConfig.value.deviceInfo.os
     const { data } = await api.post('/api/settings/system-config', localSystemConfig.value)
+    if (data?.ok)
+      savedSystemConfigSnapshot.value = JSON.stringify(localSystemConfig.value)
     showAlert(data?.ok ? '系统配置已保存，连接参数在下次登录时生效' : getApiErrorMessage(data, '保存失败'), data?.ok ? 'primary' : 'danger')
   }
   catch (e: any) {
@@ -1457,6 +1404,7 @@ async function handleResetSystemConfig() {
     if (data?.ok) {
       localSystemConfig.value = normalizeSystemConfig(data.data.saved, defaultSystemConfig.value)
       selectedPresetId.value = ''
+      savedSystemConfigSnapshot.value = JSON.stringify(localSystemConfig.value)
       showAlert('系统配置已重置，连接参数在下次登录时生效', 'primary')
     }
     else {
@@ -1470,6 +1418,36 @@ async function handleResetSystemConfig() {
     systemConfigSaving.value = false
   }
 }
+const isSystemConfigDirty = computed(() =>
+  Boolean(savedSystemConfigSnapshot.value)
+  && JSON.stringify(localSystemConfig.value) !== savedSystemConfigSnapshot.value,
+)
+const isLoginSettingsDirty = computed(() =>
+  Boolean(savedLoginSettingsSnapshot.value)
+  && JSON.stringify(localLoginSettings.value) !== savedLoginSettingsSnapshot.value,
+)
+const isOfflineDirty = computed(() =>
+  Boolean(savedOfflineSnapshot.value)
+  && getOfflineGeneralSnapshot(localOffline.value) !== savedOfflineSnapshot.value,
+)
+const hasUnsavedSettings = computed(() =>
+  showModal.value
+  || (Boolean(savedStrategySnapshot.value) && JSON.stringify(localStrategySettings.value) !== savedStrategySnapshot.value)
+  || (Boolean(savedAutomationSnapshot.value) && JSON.stringify(localAutomationSettings.value) !== savedAutomationSnapshot.value)
+  || isSystemConfigDirty.value
+  || isLoginSettingsDirty.value
+  || isOfflineDirty.value,
+)
+useUnsavedEditGuard(hasUnsavedSettings)
+
+// [fnos-fork] 上游 #182/#183 的「版本更新」（检查 / 拉取 / 在线更新 / 历史回滚 / 版本备份）在飞牛版去掉：
+// 飞牛版由应用中心安装 fpk 更新，SEA 安装目录只读，不从 GitHub 拉代码、不写入安装目录。
+// 保留上游的面板版本检测：实时连接重连后检查前端构建号，fpk 升级后页面自动刷新到新版。
+watch(() => statusStore.realtimeReconnectCount, (count) => {
+  if (count <= 0)
+    return
+  void appUpdateStore.checkVersionNow(true)
+})
 </script>
 
 <template>
@@ -1981,151 +1959,151 @@ async function handleResetSystemConfig() {
           </h3>
 
           <div class="grid grid-cols-1 items-start gap-4 xl:grid-cols-2">
-            <section class="farm-card rounded-lg p-4">
-              <div class="mb-4 flex items-start gap-3">
-                <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/25 dark:text-blue-400">
-                  <span class="i-carbon-settings-adjust text-xl" />
-                </div>
-                <div>
-                  <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                    运行环境
-                  </h4>
-                  <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                    服务器连接、时区与客户端设备参数
-                  </p>
-                </div>
-              </div>
-
-              <div v-if="systemConfigLoading" class="py-8 text-center text-gray-500">
-                <span class="i-svg-spinners-90-ring-with-bg inline-block text-2xl" />
-              </div>
-              <div v-else class="space-y-3">
-                <div v-if="devicePresets.length" class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
-                  <label class="mb-2 block text-sm text-gray-700 font-medium dark:text-gray-300">设备预设</label>
-                  <div class="flex flex-wrap gap-2">
-                    <NButton
-                      v-for="preset in devicePresets"
-                      :key="preset.id"
-                      size="small"
-                      :type="selectedPresetId === preset.id ? 'primary' : 'default'"
-                      :secondary="selectedPresetId !== preset.id"
-                      :title="preset.description"
-                      @click="applyDevicePreset(preset.id)"
-                    >
-                      {{ preset.name }}
-                    </NButton>
+            <div class="min-w-0 space-y-4">
+              <section class="farm-card rounded-lg p-4">
+                <div class="mb-4 flex items-start gap-3">
+                  <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-blue-50 text-blue-600 dark:bg-blue-900/25 dark:text-blue-400">
+                    <span class="i-carbon-settings-adjust text-xl" />
                   </div>
-                </div>
-
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <BaseInput
-                    v-model="localSystemConfig.serverUrl"
-                    label="服务器地址"
-                    type="text"
-                    placeholder="wss://..."
-                  />
                   <div>
-                    <BaseSelect
-                      v-model="localSystemConfig.timeZone"
-                      label="系统时区"
-                      :options="timeZoneOptions"
-                    />
-                    <p class="mt-1 text-xs text-gray-500 leading-relaxed dark:text-gray-400">
-                      礼包、任务、安静时段和日志均以此时区为准。
+                    <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
+                      运行环境
+                    </h4>
+                    <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
+                      服务器连接、时区与客户端设备参数
                     </p>
                   </div>
                 </div>
 
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
-                    <label class="mb-2 block text-sm text-gray-700 font-medium dark:text-gray-300">平台</label>
+                <div v-if="systemConfigLoading" class="py-8 text-center text-gray-500">
+                  <span class="i-svg-spinners-90-ring-with-bg inline-block text-2xl" />
+                </div>
+                <div v-else class="space-y-3">
+                  <div v-if="devicePresets.length" class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
+                    <label class="mb-2 block text-sm text-gray-700 font-medium dark:text-gray-300">设备预设</label>
                     <div class="flex flex-wrap gap-2">
                       <NButton
-                        v-for="option in platformOptions"
-                        :key="option.value"
+                        v-for="preset in devicePresets"
+                        :key="preset.id"
                         size="small"
-                        :type="localSystemConfig.platform === option.value ? 'primary' : 'default'"
-                        :secondary="localSystemConfig.platform !== option.value"
-                        @click="localSystemConfig.platform = option.value"
+                        :type="selectedPresetId === preset.id ? 'primary' : 'default'"
+                        :secondary="selectedPresetId !== preset.id"
+                        :title="preset.description"
+                        @click="applyDevicePreset(preset.id)"
                       >
-                        {{ option.label }}
+                        {{ preset.name }}
                       </NButton>
                     </div>
                   </div>
-                  <div class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
-                    <label class="mb-2 block text-sm text-gray-700 font-medium dark:text-gray-300">系统</label>
-                    <div class="flex flex-wrap gap-2">
-                      <NButton
-                        v-for="option in osOptions"
-                        :key="option.value"
-                        size="small"
-                        :type="localSystemConfig.deviceInfo.os === option.value ? 'primary' : 'default'"
-                        :secondary="localSystemConfig.deviceInfo.os !== option.value"
-                        @click="localSystemConfig.deviceInfo.os = option.value; localSystemConfig.os = option.value"
-                      >
-                        {{ option.label }}
-                      </NButton>
+
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <BaseInput
+                      v-model="localSystemConfig.serverUrl"
+                      label="服务器地址"
+                      type="text"
+                      placeholder="wss://..."
+                    />
+                    <div>
+                      <BaseSelect
+                        v-model="localSystemConfig.timeZone"
+                        label="系统时区"
+                        :options="timeZoneOptions"
+                      />
+                      <p class="mt-1 text-xs text-gray-500 leading-relaxed dark:text-gray-400">
+                        礼包、任务、安静时段和日志均以此时区为准。
+                      </p>
                     </div>
                   </div>
-                </div>
 
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.clientVersion"
-                    label="QQ 客户端版本"
-                    type="text"
-                    :placeholder="defaultSystemConfig.deviceInfo.clientVersion || '从服务器加载中...'"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.wxClientVersion"
-                    label="微信客户端版本"
-                    type="text"
-                    :placeholder="defaultSystemConfig.wxClientVersion || '从服务器加载中...'"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.sysSoftware"
-                    label="系统版本"
-                    type="text"
-                    placeholder="Windows 10"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.deviceId"
-                    label="设备标识"
-                    type="text"
-                    placeholder="DESKTOP-PC<WPC>"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.memory"
-                    label="内存 (MB)"
-                    type="text"
-                    placeholder="16384"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.network"
-                    label="网络"
-                    type="text"
-                    placeholder="wifi"
-                  />
-                  <BaseInput
-                    v-model="localSystemConfig.deviceInfo.userAgent"
-                    label="User-Agent"
-                    type="text"
-                    placeholder="Mozilla/5.0 ..."
-                  />
-                </div>
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <div class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
+                      <label class="mb-2 block text-sm text-gray-700 font-medium dark:text-gray-300">平台</label>
+                      <div class="flex flex-wrap gap-2">
+                        <NButton
+                          v-for="option in platformOptions"
+                          :key="option.value"
+                          size="small"
+                          :type="localSystemConfig.platform === option.value ? 'primary' : 'default'"
+                          :secondary="localSystemConfig.platform !== option.value"
+                          @click="localSystemConfig.platform = option.value"
+                        >
+                          {{ option.label }}
+                        </NButton>
+                      </div>
+                    </div>
+                    <div class="border border-gray-200 rounded-lg bg-gray-50/70 p-3 dark:border-gray-700 dark:bg-gray-900/30">
+                      <label class="mb-2 block text-sm text-gray-700 font-medium dark:text-gray-300">系统</label>
+                      <div class="flex flex-wrap gap-2">
+                        <NButton
+                          v-for="option in osOptions"
+                          :key="option.value"
+                          size="small"
+                          :type="localSystemConfig.deviceInfo.os === option.value ? 'primary' : 'default'"
+                          :secondary="localSystemConfig.deviceInfo.os !== option.value"
+                          @click="localSystemConfig.deviceInfo.os = option.value; localSystemConfig.os = option.value"
+                        >
+                          {{ option.label }}
+                        </NButton>
+                      </div>
+                    </div>
+                  </div>
 
-                <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
-                  <BaseButton variant="secondary" size="sm" :loading="systemConfigSaving" @click="handleResetSystemConfig">
-                    重置
-                  </BaseButton>
-                  <BaseButton variant="primary" size="sm" :loading="systemConfigSaving" @click="handleSaveSystemConfig">
-                    保存运行环境
-                  </BaseButton>
-                </div>
-              </div>
-            </section>
+                  <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
+                    <BaseInput
+                      v-model="localSystemConfig.deviceInfo.clientVersion"
+                      label="QQ 客户端版本"
+                      type="text"
+                      :placeholder="defaultSystemConfig.deviceInfo.clientVersion || '从服务器加载中...'"
+                    />
+                    <BaseInput
+                      v-model="localSystemConfig.wxClientVersion"
+                      label="微信客户端版本"
+                      type="text"
+                      :placeholder="defaultSystemConfig.wxClientVersion || '从服务器加载中...'"
+                    />
+                    <BaseInput
+                      v-model="localSystemConfig.deviceInfo.sysSoftware"
+                      label="系统版本"
+                      type="text"
+                      placeholder="Windows 10"
+                    />
+                    <BaseInput
+                      v-model="localSystemConfig.deviceInfo.deviceId"
+                      label="设备标识"
+                      type="text"
+                      placeholder="DESKTOP-PC<WPC>"
+                    />
+                    <BaseInput
+                      v-model="localSystemConfig.deviceInfo.memory"
+                      label="内存 (MB)"
+                      type="text"
+                      placeholder="16384"
+                    />
+                    <BaseInput
+                      v-model="localSystemConfig.deviceInfo.network"
+                      label="网络"
+                      type="text"
+                      placeholder="wifi"
+                    />
+                    <BaseInput
+                      v-model="localSystemConfig.deviceInfo.userAgent"
+                      label="User-Agent"
+                      type="text"
+                      placeholder="Mozilla/5.0 ..."
+                    />
+                  </div>
 
-            <div class="min-w-0 space-y-4">
+                  <div class="flex justify-end gap-2 border-t pt-3 dark:border-gray-700">
+                    <BaseButton variant="secondary" size="sm" :loading="systemConfigSaving" @click="handleResetSystemConfig">
+                      重置
+                    </BaseButton>
+                    <BaseButton variant="primary" size="sm" :loading="systemConfigSaving" @click="handleSaveSystemConfig">
+                      保存运行环境
+                    </BaseButton>
+                  </div>
+                </div>
+              </section>
+
               <section class="farm-card rounded-lg p-4">
                 <div class="mb-4 flex items-start gap-3">
                   <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-violet-50 text-violet-600 dark:bg-violet-900/25 dark:text-violet-400">
@@ -2179,7 +2157,9 @@ async function handleResetSystemConfig() {
                   </BaseButton>
                 </div>
               </section>
+            </div>
 
+            <div class="min-w-0 space-y-4">
               <section class="farm-card rounded-lg p-4">
                 <div class="mb-4 flex items-start gap-3">
                   <div class="h-9 w-9 flex shrink-0 items-center justify-center rounded-lg bg-green-50 text-green-600 dark:bg-green-900/25 dark:text-green-400">
@@ -2187,75 +2167,54 @@ async function handleResetSystemConfig() {
                   </div>
                   <div>
                     <h4 class="text-base text-gray-900 font-bold dark:text-gray-100">
-                      下线提醒
+                      通知设置
                     </h4>
                     <p class="mt-0.5 text-xs text-gray-500 dark:text-gray-400">
-                      配置账号离线后的通知与清理
+                      商人提醒需在对应账号的「自动控制」中开启。
                     </p>
                   </div>
                 </div>
 
-                <div class="grid grid-cols-1 gap-3 sm:grid-cols-2">
-                  <div class="min-w-0 flex flex-col gap-1.5">
-                    <div class="min-h-6 flex items-center justify-between gap-2">
-                      <span class="text-sm text-gray-700 font-medium dark:text-gray-300">推送渠道</span>
-                      <BaseButton
-                        variant="text"
-                        size="sm"
-                        :disabled="!currentChannelDocUrl"
-                        @click="openChannelDocs"
-                      >
-                        官方文档
-                      </BaseButton>
+                <fieldset v-if="localOffline.notificationTypes" class="mb-4 min-w-0">
+                  <legend class="notification-type-label mb-3">
+                    通知类型
+                  </legend>
+                  <div class="flex flex-wrap gap-2">
+                    <div class="notification-type-option">
+                      <BaseSwitch v-model="localOffline.notificationTypes.offline" label="账号下线" />
                     </div>
-                    <BaseSelect
-                      v-model="localOffline.channel"
-                      :options="channelOptions"
-                    />
+                    <div class="notification-type-option flex-wrap justify-between gap-x-3 gap-y-2" role="group" aria-labelledby="notification-merchant-label">
+                      <span id="notification-merchant-label" class="notification-type-label">神秘商人</span>
+                      <div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+                        <BaseSwitch v-model="localOffline.notificationTypes.mysteryArrival" label="到货" />
+                        <BaseSwitch v-model="localOffline.notificationTypes.mysteryPurchase" label="自动购买" />
+                      </div>
+                    </div>
                   </div>
+                </fieldset>
 
-                  <BaseInput
-                    v-if="offlineChannelUsesEndpoint"
-                    v-model="localOffline.endpoint"
-                    :label="offlineEndpointLabel"
-                    type="text"
-                    :placeholder="offlineEndpointPlaceholder"
+                <PushChannelsManager
+                  :config="localOffline"
+                  :saving="offlineSaving || settingStore.supportsPushChannels === null"
+                  :supports-channels="settingStore.supportsPushChannels !== false"
+                  @save-channel="handleSaveChannel"
+                />
+
+                <!-- [fnos-fork] Bark 重要警告 -->
+                <div v-if="hasBarkChannel" class="mt-3 flex flex-col gap-1">
+                  <BaseSwitch
+                    v-model="localOffline.barkCritical"
+                    label="Bark 下线提醒静音也提醒（重要警告）"
                   />
+                  <p class="text-xs text-gray-500 leading-relaxed dark:text-gray-400">
+                    开启后 Bark 渠道的下线提醒以「重要警告」发送（音量 5、铃声持续约 30 秒），手机静音或勿扰时也会响铃；「测试已启用渠道」同样按此设置发送；其他通知类型和其他渠道不受影响。需在 iPhone「设置 → 通知 → Bark」里允许「重要警告」。改动后点「保存通知设置」生效。
+                  </p>
+                </div>
 
-                  <BaseInput
-                    v-if="!isDingTalkChannel"
-                    v-model="localOffline.token"
-                    :label="offlineTokenLabel"
-                    type="text"
-                    :placeholder="offlineTokenPlaceholder"
-                  />
-
-                  <template v-else>
-                    <BaseInput
-                      v-model="localOffline.secret"
-                      label="加签密钥（可选）"
-                      type="password"
-                      placeholder="仅在机器人开启加签时填写 SEC..."
-                    />
-                    <p class="text-xs text-gray-500 leading-relaxed sm:col-span-2 dark:text-gray-400">
-                      从群机器人的设置页复制完整 Webhook；只有开启“加签”时才需要填写加签密钥。
-                    </p>
-                  </template>
-
-                  <!-- [fnos-fork] Bark 重要警告 -->
-                  <div v-if="isBarkChannel" class="flex flex-col gap-1 sm:col-span-2">
-                    <BaseSwitch
-                      v-model="localOffline.barkCritical"
-                      label="静音也提醒（重要警告）"
-                    />
-                    <p class="text-xs text-gray-500 leading-relaxed dark:text-gray-400">
-                      开启后下线提醒以 Bark「重要警告」发送（音量 5、铃声持续约 30 秒），手机静音或勿扰时也会响铃；「测试通知」同样按此设置发送。需在 iPhone「设置 → 通知 → Bark」里允许「重要警告」。
-                    </p>
-                  </div>
-
+                <div class="grid grid-cols-1 mt-3 gap-3 sm:grid-cols-2">
                   <BaseInput
                     v-model="localOffline.title"
-                    label="标题"
+                    label="下线通知标题"
                     type="text"
                     placeholder="提醒标题"
                   />
@@ -2268,7 +2227,7 @@ async function handleResetSystemConfig() {
                   />
                   <BaseInput
                     v-model="localOffline.msg"
-                    label="内容"
+                    label="下线通知内容"
                     type="text"
                     placeholder="提醒内容"
                     class="sm:col-span-2"
@@ -2280,19 +2239,19 @@ async function handleResetSystemConfig() {
                     variant="secondary"
                     size="sm"
                     :loading="offlineTesting"
-                    :disabled="offlineSaving"
+                    :disabled="offlineSaving || !hasActivePushChannel"
                     @click="handleTestOffline"
                   >
-                    测试通知
+                    测试已启用渠道
                   </BaseButton>
                   <BaseButton
                     variant="primary"
                     size="sm"
                     :loading="offlineSaving"
-                    :disabled="offlineTesting"
+                    :disabled="offlineTesting || settingStore.supportsPushChannels === null"
                     @click="handleSaveOffline"
                   >
-                    保存下线提醒设置
+                    保存通知设置
                   </BaseButton>
                 </div>
               </section>
@@ -2314,3 +2273,24 @@ async function handleResetSystemConfig() {
     />
   </div>
 </template>
+
+<style scoped>
+.notification-type-option {
+  display: flex;
+  min-width: 0;
+  min-height: 42px;
+  flex: 1 1 auto;
+  align-items: center;
+  padding: 10px 12px;
+  border: 1px solid var(--ui-border);
+  border-radius: var(--ui-radius-control);
+  background: color-mix(in srgb, var(--ui-surface-strong) 58%, transparent);
+}
+
+.notification-type-label {
+  color: var(--ui-ink);
+  font-size: 13px;
+  font-weight: var(--fw-600);
+  line-height: 20px;
+}
+</style>
